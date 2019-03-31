@@ -6,21 +6,29 @@
 package org.m_ld.guicicle;
 
 import com.google.inject.Guice;
+import com.google.inject.Inject;
 import com.google.inject.Injector;
 import com.google.inject.Module;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.Context;
+import io.vertx.core.Future;
 import io.vertx.core.Vertx;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.shareddata.Shareable;
 
+import java.util.Set;
+import java.util.function.BiConsumer;
 import java.util.stream.Stream;
 
+import static io.vertx.core.CompositeFuture.all;
 import static java.util.Collections.singletonList;
+import static java.util.stream.Collectors.toList;
 import static java.util.stream.Stream.concat;
 
-public abstract class Guicicle extends AbstractVerticle
+public class Guicicle extends AbstractVerticle
 {
+    @Inject private Set<Vertice> vertices;
+
     private static class SharedInjector implements Shareable
     {
         final Injector injector;
@@ -62,5 +70,31 @@ public abstract class Guicicle extends AbstractVerticle
             e.printStackTrace();
             throw e;
         }
+    }
+
+    @Override public void start(Future<Void> startFuture)
+    {
+        forEachVertice(startFuture, Vertice::start);
+    }
+
+    @Override public void stop(Future<Void> stopFuture)
+    {
+        forEachVertice(stopFuture, Vertice::stop);
+    }
+
+    private void forEachVertice(Future<Void> doneFuture, BiConsumer<Vertice, Future<Void>> action)
+    {
+        all(vertices.stream().map(vertice -> {
+            final Future<Void> future = Future.future();
+            action.accept(vertice, future);
+            return future;
+        }).collect(toList())).setHandler(result -> {
+            if (result.failed())
+            {
+                doneFuture.fail(result.cause());
+            }
+            else
+                doneFuture.complete();
+        });
     }
 }

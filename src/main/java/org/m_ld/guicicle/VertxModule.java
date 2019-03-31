@@ -6,24 +6,20 @@
 package org.m_ld.guicicle;
 
 import com.google.inject.AbstractModule;
-import com.google.inject.Inject;
 import com.google.inject.Provides;
 import com.google.inject.Singleton;
-import com.google.inject.name.Named;
 import com.google.inject.name.Names;
 import io.vertx.core.Vertx;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
-import org.jetbrains.annotations.NotNull;
 import org.m_ld.guicicle.codec.BidiCodec;
 
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.Executor;
 
 import static java.lang.reflect.Modifier.isFinal;
-import static java.util.Collections.emptyList;
 
 public class VertxModule extends AbstractModule
 {
@@ -39,7 +35,7 @@ public class VertxModule extends AbstractModule
     @Override
     protected void configure()
     {
-        bindObjectFields("", config);
+        bindJsonValue("config", config);
     }
 
     private void bindObjectFields(String prefix, JsonObject object)
@@ -53,10 +49,12 @@ public class VertxModule extends AbstractModule
         if (value instanceof JsonObject)
         {
             bindObjectFields(key, (JsonObject) value);
+            bind(JsonObject.class).annotatedWith(Names.named(key)).toInstance(((JsonObject) value));
             bind(Map.class).annotatedWith(Names.named(key)).toInstance(((JsonObject) value).getMap());
         }
         else if (value instanceof JsonArray)
         {
+            bind(JsonArray.class).annotatedWith(Names.named(key)).toInstance(((JsonArray) value));
             bind(List.class).annotatedWith(Names.named(key)).toInstance(((JsonArray) value).getList());
         }
         else if (value != null)
@@ -66,28 +64,9 @@ public class VertxModule extends AbstractModule
         }
     }
 
-    private static class Codecs implements Iterable<BidiCodec>
-    {
-        @Inject(optional = true)
-        List<BidiCodec> codecs = emptyList();
-
-        @NotNull @Override
-        public Iterator<BidiCodec> iterator()
-        {
-            return codecs.iterator();
-        }
-    }
-
-    @Provides
-    @Named("config")
-    JsonObject config()
-    {
-        return config;
-    }
-
     @Provides
     @Singleton
-    Vertx vertx(Codecs codecs)
+    Vertx vertx(Set<BidiCodec> codecs)
     {
         codecs.forEach(codec -> {
             final Class dataClass = codec.getDataClass();
