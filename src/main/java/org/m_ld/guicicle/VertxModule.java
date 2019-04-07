@@ -32,8 +32,7 @@ public class VertxModule extends AbstractModule
         this.config = config;
     }
 
-    @Override
-    protected void configure()
+    @Override protected void configure()
     {
         bindJsonValue("config", config);
     }
@@ -48,25 +47,23 @@ public class VertxModule extends AbstractModule
     {
         if (value instanceof JsonObject)
         {
-            bindObjectFields(key, (JsonObject) value);
-            bind(JsonObject.class).annotatedWith(Names.named(key)).toInstance(((JsonObject) value));
-            bind(Map.class).annotatedWith(Names.named(key)).toInstance(((JsonObject) value).getMap());
+            bindObjectFields(key, (JsonObject)value);
+            bind(JsonObject.class).annotatedWith(Names.named(key)).toInstance(((JsonObject)value));
+            bind(Map.class).annotatedWith(Names.named(key)).toInstance(((JsonObject)value).getMap());
         }
         else if (value instanceof JsonArray)
         {
-            bind(JsonArray.class).annotatedWith(Names.named(key)).toInstance(((JsonArray) value));
-            bind(List.class).annotatedWith(Names.named(key)).toInstance(((JsonArray) value).getList());
+            bind(JsonArray.class).annotatedWith(Names.named(key)).toInstance(((JsonArray)value));
+            bind(List.class).annotatedWith(Names.named(key)).toInstance(((JsonArray)value).getList());
         }
         else if (value != null)
         {
             //noinspection unchecked
-            bind((Class) value.getClass()).annotatedWith(Names.named(key)).toInstance(value);
+            bind((Class)value.getClass()).annotatedWith(Names.named(key)).toInstance(value);
         }
     }
 
-    @Provides
-    @Singleton
-    Vertx vertx(Set<BidiCodec> codecs)
+    @Provides @Singleton Vertx vertx(Set<BidiCodec> codecs)
     {
         codecs.forEach(codec -> {
             final Class dataClass = codec.getDataClass();
@@ -83,8 +80,7 @@ public class VertxModule extends AbstractModule
         return vertx;
     }
 
-    @Provides
-    Executor blockingExecutor(Vertx vertx)
+    @Provides Executor blockingExecutor(Vertx vertx)
     {
         return runnable -> vertx.executeBlocking(future -> {
             runnable.run();

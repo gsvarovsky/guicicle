@@ -6,33 +6,37 @@
 package org.m_ld.guicicle.channel;
 
 import io.vertx.core.Vertx;
-import io.vertx.core.eventbus.DeliveryOptions;
 import io.vertx.core.eventbus.MessageConsumer;
+import io.vertx.core.eventbus.MessageProducer;
 
-import java.util.function.Consumer;
-
-public abstract class EventBusChannel<T> implements Channel<T>
+public class EventBusChannel<T> implements Channel<T>
 {
-    protected final String address;
-    protected final DeliveryOptions deliveryOptions;
-    protected final Vertx vertx;
+    private final MessageConsumer<T> consumer;
+    private final MessageProducer<T> producer;
 
-    public EventBusChannel(Vertx vertx, String address)
+    public EventBusChannel(Vertx vertx, ChannelOptions options, String address)
     {
-        this.vertx = vertx;
-        this.address = address;
-        this.deliveryOptions = new DeliveryOptions();
+        this.consumer = vertx.eventBus().consumer(address);
+        switch (options.getDeliveryType())
+        {
+            case P2P:
+                this.producer = vertx.eventBus().sender(address, options);
+                break;
+            case PUB_SUB:
+                this.producer = vertx.eventBus().publisher(address, options);
+                break;
+            default:
+                throw new AssertionError();
+        }
     }
 
-    public Channel<T> withOptions(Consumer<DeliveryOptions> modify)
+    @Override public MessageConsumer<T> consumer()
     {
-        modify.accept(deliveryOptions);
-        return this;
+        return consumer;
     }
 
-    @Override
-    public MessageConsumer<T> consumer()
+    @Override public MessageProducer<T> producer()
     {
-        return vertx.eventBus().consumer(address);
+        return producer;
     }
 }

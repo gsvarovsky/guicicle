@@ -15,6 +15,7 @@ import io.vertx.core.Future;
 import io.vertx.core.Vertx;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.shareddata.Shareable;
+import org.jetbrains.annotations.NotNull;
 
 import java.util.Set;
 import java.util.function.BiConsumer;
@@ -33,9 +34,9 @@ public class Guicicle extends AbstractVerticle
     {
         final Injector injector;
 
-        SharedInjector(Stream<Module> modules)
+        SharedInjector(Module... modules)
         {
-            this.injector = Guice.createInjector(modules.toArray(Module[]::new));
+            this.injector = Guice.createInjector(modules);
         }
     }
 
@@ -47,21 +48,7 @@ public class Guicicle extends AbstractVerticle
         try
         {
             vertx.sharedData().<String, SharedInjector>getLocalMap("guicicle")
-                .computeIfAbsent("injector", k -> {
-                    final Stream<Module> appModules =
-                        config().getJsonArray("guice.modules", new JsonArray(
-                            singletonList(config().getString("guice.module")))).stream().map(m -> {
-                            try
-                            {
-                                return (Module)Class.forName(m.toString()).newInstance();
-                            }
-                            catch (ClassNotFoundException | IllegalAccessException | InstantiationException e)
-                            {
-                                throw new RuntimeException(e);
-                            }
-                        });
-                    return new SharedInjector(concat(Stream.of(new VertxModule(vertx, config())), appModules));
-                })
+                .computeIfAbsent("injector", k -> createInjector(vertx))
                 .injector.injectMembers(this);
         }
         catch (RuntimeException e)
@@ -70,6 +57,32 @@ public class Guicicle extends AbstractVerticle
             e.printStackTrace();
             throw e;
         }
+    }
+
+    @NotNull private Guicicle.SharedInjector createInjector(Vertx vertx)
+    {
+        return new SharedInjector(
+            concat(Stream.of(new VertxModule(vertx, config())), appModules()).toArray(Module[]::new));
+    }
+
+    @NotNull private Stream<Module> appModules()
+    {
+        return appModuleClassNames().map(m -> {
+            try
+            {
+                return (Module)Class.forName(m).newInstance();
+            }
+            catch (ClassNotFoundException | IllegalAccessException | InstantiationException e)
+            {
+                throw new RuntimeException(e);
+            }
+        });
+    }
+
+    private Stream<String> appModuleClassNames()
+    {
+        return config().getJsonArray("guice.modules", new JsonArray(
+            singletonList(config().getString("guice.module")))).stream().map(Object::toString);
     }
 
     @Override public void start(Future<Void> startFuture)
@@ -88,13 +101,6 @@ public class Guicicle extends AbstractVerticle
             final Future<Void> future = Future.future();
             action.accept(vertice, future);
             return future;
-        }).collect(toList())).setHandler(result -> {
-            if (result.failed())
-            {
-                doneFuture.fail(result.cause());
-            }
-            else
-                doneFuture.complete();
-        });
+        }).collect(toList())).setHandler(result -> doneFuture.handle(result.mapEmpty()));
     }
 }

@@ -11,13 +11,24 @@
 
     <groupId>org.m-ld</groupId>
     <artifactId>guicicle</artifactId>
-    <version>0.0.1</version>
+    <version>0.1.0</version>
+
+    <properties>
+        <guice.version>4.1.0</guice.version>
+        <vertx.version>3.5.4</vertx.version>
+    </properties>
 
     <dependencies>
         <dependency>
             <groupId>io.vertx</groupId>
             <artifactId>vertx-core</artifactId>
-            <version>3.5.4</version>
+            <version>${vertx.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-mqtt</artifactId>
+            <version>${vertx.version}</version>
+            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>com.google.inject</groupId>
@@ -41,9 +52,6 @@
             <version>16.0.3</version>
         </dependency>
     </dependencies>
-    <properties>
-        <guice.version>4.1.0</guice.version>
-    </properties>
 
     <build>
         <plugins>
