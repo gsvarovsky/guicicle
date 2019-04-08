@@ -62,7 +62,7 @@ public class Guicicle extends AbstractVerticle
     @NotNull private Guicicle.SharedInjector createInjector(Vertx vertx)
     {
         return new SharedInjector(
-            concat(Stream.of(new VertxModule(vertx, config())), appModules()).toArray(Module[]::new));
+            concat(Stream.of(new VertxCoreModule(vertx, config())), appModules()).toArray(Module[]::new));
     }
 
     @NotNull private Stream<Module> appModules()

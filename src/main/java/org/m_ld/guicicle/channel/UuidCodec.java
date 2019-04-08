@@ -3,18 +3,18 @@
  * Licensed under the MIT License. See LICENSE file in the project root for full license information.
  */
 
-package org.m_ld.guicicle.codec;
+package org.m_ld.guicicle.channel;
 
 import io.vertx.core.buffer.Buffer;
 
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
-public class UuidCodec extends BidiCodec<UUID>
+public class UuidCodec extends ChannelCodec<UUID>
 {
     public UuidCodec()
     {
-        super(UUID.class);
+        super(UUID.class, UUID.class.getSimpleName());
     }
 
     @Override

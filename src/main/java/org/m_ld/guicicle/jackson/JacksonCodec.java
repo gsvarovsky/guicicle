@@ -3,22 +3,23 @@
  * Licensed under the MIT License. See LICENSE file in the project root for full license information.
  */
 
-package org.m_ld.guicicle.codec;
+package org.m_ld.guicicle.jackson;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.vertx.core.buffer.Buffer;
+import org.m_ld.guicicle.channel.ChannelCodec;
 
 import java.io.IOException;
 import java.util.concurrent.atomic.AtomicInteger;
 
-public class JacksonCodec<T> extends BidiCodec<T>
+public class JacksonCodec<T> extends ChannelCodec<T>
 {
     private final ObjectMapper objectMapper;
 
-    public JacksonCodec(ObjectMapper objectMapper, Class<T> dataClass)
+    public JacksonCodec(ObjectMapper objectMapper, Class<T> dataClass, String name)
     {
-        super(dataClass);
+        super(dataClass, name);
         this.objectMapper = objectMapper;
     }
 

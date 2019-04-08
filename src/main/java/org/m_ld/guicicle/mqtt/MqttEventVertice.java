@@ -6,17 +6,17 @@
 package org.m_ld.guicicle.mqtt;
 
 import com.google.inject.Inject;
+import com.google.inject.Injector;
+import com.google.inject.Key;
+import com.google.inject.TypeLiteral;
 import com.google.inject.name.Named;
+import com.google.inject.name.Names;
 import io.netty.handler.codec.mqtt.MqttQoS;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
-import io.vertx.core.Vertx;
-import io.vertx.core.eventbus.Message;
-import io.vertx.core.eventbus.MessageCodec;
-import io.vertx.core.eventbus.MessageConsumer;
+import io.vertx.core.eventbus.*;
 import io.vertx.core.eventbus.impl.BodyReadStream;
-import io.vertx.core.json.JsonObject;
 import io.vertx.core.streams.ReadStream;
 import io.vertx.mqtt.MqttClient;
 import io.vertx.mqtt.MqttClientOptions;
@@ -25,10 +25,12 @@ import io.vertx.mqtt.messages.MqttPublishMessage;
 import io.vertx.mqtt.messages.MqttSubAckMessage;
 import org.m_ld.guicicle.Handlers;
 import org.m_ld.guicicle.Vertice;
+import org.m_ld.guicicle.channel.Channel;
+import org.m_ld.guicicle.channel.ChannelCodec;
+import org.m_ld.guicicle.channel.ChannelOptions;
+import org.m_ld.guicicle.channel.ChannelProvider;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Queue;
+import java.util.*;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.regex.Pattern;
 
@@ -39,20 +41,30 @@ import static java.util.Objects.requireNonNull;
 import static org.m_ld.guicicle.Handlers.Flag.SINGLE_INSTANCE;
 import static org.m_ld.guicicle.Handlers.Flag.SINGLE_USE;
 
-public class MqttEventVertice implements Vertice
+public class MqttEventVertice implements ChannelProvider, Vertice
 {
-    private final static int MQTTASYNC_BAD_QOS = -9;
+    private static final int MQTTASYNC_BAD_QOS = -9;
     private static final int NO_PACKET = -1;
+    private static final Map<ChannelOptions.Quality, MqttQoS> MQTT_QOS = new HashMap<>();
+    static
+    {
+        MQTT_QOS.put(ChannelOptions.Quality.AT_MOST_ONCE, MqttQoS.AT_MOST_ONCE);
+        MQTT_QOS.put(ChannelOptions.Quality.AT_LEAST_ONCE, MqttQoS.AT_LEAST_ONCE);
+        MQTT_QOS.put(ChannelOptions.Quality.EXACTLY_ONCE, MqttQoS.EXACTLY_ONCE);
+    }
     @Inject(optional = true) @Named("config.mqtt.buffer.size") private int bufferSize = 128;
     @Inject(optional = true) @Named("config.mqtt.port") private int port = MqttClientOptions.DEFAULT_PORT;
     @Inject(optional = true) @Named("config.mqtt.host") private String host = MqttClientOptions.DEFAULT_HOST;
     private boolean connected = false;
     private final MqttClient mqtt;
+    private final Injector injector;
+
     private final List<MqttConsumer<?>> consumers = new ArrayList<>();
 
-    @Inject public MqttEventVertice(Vertx vertx, @Named("config.mqtt") JsonObject mqttOptions)
+    @Inject public MqttEventVertice(MqttClient mqtt, Injector injector)
     {
-        this.mqtt = MqttClient.create(vertx, new MqttClientOptions(mqttOptions));
+        this.mqtt = mqtt;
+        this.injector = injector;
     }
 
     @Override public void start(Future<Void> startFuture)
@@ -79,9 +91,26 @@ public class MqttEventVertice implements Vertice
         });
     }
 
-    public <T> MessageConsumer<T> consumer(String address, MqttQoS qos, MessageCodec<?, T> codec)
+    @Override public <T> Channel<T> channel(String address, ChannelOptions options)
     {
-        return new MqttConsumer<>(address, qos, codec);
+        final ChannelCodec<T> codec = injector.getInstance(
+            Key.get(new TypeLiteral<ChannelCodec<T>>() {}, Names.named(options.getCodecName())));
+        final MqttQoS qos = MQTT_QOS.get(options.getQuality());
+        final MqttConsumer<T> consumer = new MqttConsumer<>(address, qos, codec);
+        final MqttProducer<T> producer = new MqttProducer<>();
+
+        return new Channel<T>()
+        {
+            @Override public MessageConsumer<T> consumer()
+            {
+                return consumer;
+            }
+
+            @Override public MessageProducer<T> producer()
+            {
+                return producer;
+            }
+        };
     }
 
     private void onMessage(MqttPublishMessage message)
@@ -122,6 +151,64 @@ public class MqttEventVertice implements Vertice
             if (consumer.unsubscribeId == messageId)
                 consumer.onUnsubscribe();
         });
+    }
+
+    private class MqttProducer<T> implements MessageProducer<T>
+    {
+        @Override public MessageProducer<T> send(T message)
+        {
+            return null;
+        }
+
+        @Override public <R> MessageProducer<T> send(T message, Handler<AsyncResult<Message<R>>> replyHandler)
+        {
+            return null;
+        }
+
+        @Override public MessageProducer<T> exceptionHandler(Handler<Throwable> handler)
+        {
+            return null;
+        }
+
+        @Override public MessageProducer<T> write(T data)
+        {
+            return null;
+        }
+
+        @Override public MessageProducer<T> setWriteQueueMaxSize(int maxSize)
+        {
+            return null;
+        }
+
+        @Override public boolean writeQueueFull()
+        {
+            return false;
+        }
+
+        @Override public MessageProducer<T> drainHandler(Handler<Void> handler)
+        {
+            return null;
+        }
+
+        @Override public MessageProducer<T> deliveryOptions(DeliveryOptions options)
+        {
+            return null;
+        }
+
+        @Override public String address()
+        {
+            return null;
+        }
+
+        @Override public void end()
+        {
+
+        }
+
+        @Override public void close()
+        {
+
+        }
     }
 
     private class MqttConsumer<T> implements MessageConsumer<T>

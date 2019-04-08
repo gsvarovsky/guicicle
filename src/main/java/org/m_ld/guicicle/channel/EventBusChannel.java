@@ -14,20 +14,22 @@ public class EventBusChannel<T> implements Channel<T>
     private final MessageConsumer<T> consumer;
     private final MessageProducer<T> producer;
 
-    public EventBusChannel(Vertx vertx, ChannelOptions options, String address)
+    public EventBusChannel(Vertx vertx, String address, ChannelOptions options)
     {
         this.consumer = vertx.eventBus().consumer(address);
-        switch (options.getDeliveryType())
+        switch (options.getDelivery())
         {
-            case P2P:
+            case SEND:
                 this.producer = vertx.eventBus().sender(address, options);
                 break;
-            case PUB_SUB:
+            case PUBLISH:
                 this.producer = vertx.eventBus().publisher(address, options);
                 break;
             default:
                 throw new AssertionError();
         }
+        if (options.getQuality() != ChannelOptions.Quality.AT_MOST_ONCE)
+            throw new IllegalArgumentException("EventBus does not support quality of service");
     }
 
     @Override public MessageConsumer<T> consumer()

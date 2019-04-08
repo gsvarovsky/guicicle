@@ -8,25 +8,31 @@ package org.m_ld.guicicle;
 import com.google.inject.AbstractModule;
 import com.google.inject.Provides;
 import com.google.inject.Singleton;
+import com.google.inject.multibindings.ProvidesIntoSet;
 import com.google.inject.name.Names;
 import io.vertx.core.Vertx;
+import io.vertx.core.http.HttpServer;
+import io.vertx.core.http.HttpServerOptions;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
-import org.m_ld.guicicle.codec.BidiCodec;
+import org.m_ld.guicicle.channel.*;
+import org.m_ld.guicicle.channel.ChannelProvider.Local;
 
+import javax.inject.Named;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Executor;
 
+import static com.google.inject.multibindings.Multibinder.newSetBinder;
 import static java.lang.reflect.Modifier.isFinal;
 
-public class VertxModule extends AbstractModule
+public class VertxCoreModule extends AbstractModule
 {
     private final Vertx vertx;
     private final JsonObject config;
 
-    VertxModule(Vertx vertx, JsonObject config)
+    VertxCoreModule(Vertx vertx, JsonObject config)
     {
         this.vertx = vertx;
         this.config = config;
@@ -35,6 +41,8 @@ public class VertxModule extends AbstractModule
     @Override protected void configure()
     {
         bindJsonValue("config", config);
+        newSetBinder(binder(), ChannelCodec.class);
+        newSetBinder(binder(), Vertice.class);
     }
 
     private void bindObjectFields(String prefix, JsonObject object)
@@ -63,7 +71,7 @@ public class VertxModule extends AbstractModule
         }
     }
 
-    @Provides @Singleton Vertx vertx(Set<BidiCodec> codecs)
+    @Provides @Singleton Vertx vertx(Set<ChannelCodec> codecs)
     {
         codecs.forEach(codec -> {
             final Class dataClass = codec.getDataClass();
@@ -80,6 +88,27 @@ public class VertxModule extends AbstractModule
         return vertx;
     }
 
+    @Provides HttpServerOptions httpServerOptions(@Named("config.http") JsonObject httpOptions)
+    {
+        return new HttpServerOptions(httpOptions);
+    }
+
+    @Provides HttpServer httpServer(HttpServerOptions httpServerOptions)
+    {
+        return vertx.createHttpServer(httpServerOptions);
+    }
+
+    @Provides @Local ChannelProvider eventBusChannels(Vertx vertx)
+    {
+        return new ChannelProvider()
+        {
+            @Override public <T> Channel<T> channel(String address, ChannelOptions options)
+            {
+                return new EventBusChannel<>(vertx, address, options);
+            }
+        };
+    }
+
     @Provides Executor blockingExecutor(Vertx vertx)
     {
         return runnable -> vertx.executeBlocking(future -> {
@@ -89,5 +118,10 @@ public class VertxModule extends AbstractModule
             if (result.failed())
                 vertx.exceptionHandler().handle(result.cause());
         });
+    }
+
+    @ProvidesIntoSet ChannelCodec uuidCodec()
+    {
+        return new UuidCodec();
     }
 }

@@ -3,20 +3,22 @@
  * Licensed under the MIT License. See LICENSE file in the project root for full license information.
  */
 
-package org.m_ld.guicicle.codec;
+package org.m_ld.guicicle.channel;
 
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.eventbus.MessageCodec;
 
 import java.util.concurrent.atomic.AtomicInteger;
 
-public abstract class BidiCodec<T> implements MessageCodec<T, T>
+public abstract class ChannelCodec<T> implements MessageCodec<T, T>
 {
     protected final Class<T> dataClass;
+    private final String name;
 
-    protected BidiCodec(Class<T> dataClass)
+    protected ChannelCodec(Class<T> dataClass, String name)
     {
         this.dataClass = dataClass;
+        this.name = name;
     }
 
     @Override
@@ -36,7 +38,7 @@ public abstract class BidiCodec<T> implements MessageCodec<T, T>
     @Override
     public String name()
     {
-        return dataClass.getName();
+        return name;
     }
 
     @Override

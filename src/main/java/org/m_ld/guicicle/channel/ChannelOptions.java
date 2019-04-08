@@ -13,12 +13,18 @@ import static java.util.Objects.requireNonNull;
 
 public class ChannelOptions extends DeliveryOptions
 {
-    public enum DeliveryType
+    public enum Delivery
     {
-        P2P, PUB_SUB
+        SEND, PUBLISH
     }
 
-    private DeliveryType deliveryType = DeliveryType.PUB_SUB;
+    public enum Quality
+    {
+        AT_MOST_ONCE, AT_LEAST_ONCE, EXACTLY_ONCE
+    }
+
+    private Delivery delivery = Delivery.PUBLISH;
+    private Quality quality = Quality.AT_MOST_ONCE;
 
     public ChannelOptions()
     {
@@ -27,23 +33,38 @@ public class ChannelOptions extends DeliveryOptions
     public ChannelOptions(ChannelOptions other)
     {
         super(other);
-        this.deliveryType = other.deliveryType;
+        this.delivery = other.delivery;
+        this.quality = other.quality;
     }
 
     public ChannelOptions(JsonObject json)
     {
         super(json);
-        this.deliveryType = DeliveryType.valueOf(json.getString("deliveryType"));
+        if (json.containsKey("delivery"))
+            this.delivery = Delivery.valueOf(json.getString("delivery"));
+        if (json.containsKey("quality"))
+            this.quality = Quality.valueOf(json.getString("quality"));
     }
 
-    public DeliveryType getDeliveryType()
+    public Delivery getDelivery()
     {
-        return deliveryType;
+        return delivery;
     }
 
-    public ChannelOptions setDeliveryType(DeliveryType deliveryType)
+    public ChannelOptions setDelivery(Delivery delivery)
     {
-        this.deliveryType = requireNonNull(deliveryType, "Delivery type must not be null");
+        this.delivery = requireNonNull(delivery, "Delivery type must not be null");
+        return this;
+    }
+
+    public Quality getQuality()
+    {
+        return quality;
+    }
+
+    public ChannelOptions setQuality(Quality quality)
+    {
+        this.quality = requireNonNull(quality, "Quality of service must not be null");
         return this;
     }
 
@@ -68,7 +89,8 @@ public class ChannelOptions extends DeliveryOptions
     @Override public JsonObject toJson()
     {
         final JsonObject json = super.toJson();
-        json.put("deliveryType", deliveryType.name());
+        json.put("delivery", delivery.name());
+        json.put("quality", quality.name());
         return json;
     }
 }
