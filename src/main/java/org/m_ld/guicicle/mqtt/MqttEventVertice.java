@@ -15,7 +15,11 @@ import io.netty.handler.codec.mqtt.MqttQoS;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
-import io.vertx.core.eventbus.*;
+import io.vertx.core.buffer.Buffer;
+import io.vertx.core.eventbus.DeliveryOptions;
+import io.vertx.core.eventbus.Message;
+import io.vertx.core.eventbus.MessageConsumer;
+import io.vertx.core.eventbus.MessageProducer;
 import io.vertx.core.eventbus.impl.BodyReadStream;
 import io.vertx.core.streams.ReadStream;
 import io.vertx.mqtt.MqttClient;
@@ -32,14 +36,15 @@ import org.m_ld.guicicle.channel.ChannelProvider;
 
 import java.util.*;
 import java.util.concurrent.ArrayBlockingQueue;
-import java.util.regex.Pattern;
 
 import static io.vertx.core.Future.failedFuture;
 import static io.vertx.core.Future.succeededFuture;
+import static io.vertx.core.buffer.Buffer.buffer;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 import static org.m_ld.guicicle.Handlers.Flag.SINGLE_INSTANCE;
 import static org.m_ld.guicicle.Handlers.Flag.SINGLE_USE;
+import static org.m_ld.guicicle.mqtt.MqttUtil.isMatch;
 
 public class MqttEventVertice implements ChannelProvider, Vertice
 {
@@ -59,7 +64,8 @@ public class MqttEventVertice implements ChannelProvider, Vertice
     private final MqttClient mqtt;
     private final Injector injector;
 
-    private final List<MqttConsumer<?>> consumers = new ArrayList<>();
+    private final List<MqttChannel<?>.MqttConsumer> consumers = new ArrayList<>();
+    private final List<MqttChannel<?>.MqttProducer> producers = new ArrayList<>();
 
     @Inject public MqttEventVertice(MqttClient mqtt, Injector injector)
     {
@@ -69,15 +75,16 @@ public class MqttEventVertice implements ChannelProvider, Vertice
 
     @Override public void start(Future<Void> startFuture)
     {
-        mqtt.publishHandler(this::onMessage)
-            .subscribeCompletionHandler(this::onSubscriptionAck)
-            .unsubscribeCompletionHandler(this::onUnsubscribeAck)
+        mqtt.publishHandler(msg -> consumers.forEach(c -> c.onMessage(msg)))
+            .subscribeCompletionHandler(msg -> consumers.forEach(c -> c.onSubscribeAck(msg)))
+            .unsubscribeCompletionHandler(msg -> consumers.forEach(c -> c.onUnsubscribeAck(msg)))
+            .publishCompletionHandler(msg -> producers.forEach(p -> p.onPublished(msg)))
             .connect(port, host, connectResult -> {
                 if (connectResult.succeeded())
                 {
                     connected = true;
                     // Register any pre-existing consumers which have a handler
-                    consumers.forEach(MqttConsumer::register);
+                    consumers.forEach(MqttChannel.MqttConsumer::register);
                 }
                 startFuture.handle(connectResult.mapEmpty());
             });
@@ -86,277 +93,306 @@ public class MqttEventVertice implements ChannelProvider, Vertice
     @Override public void stop(Future<Void> stopFuture)
     {
         mqtt.disconnect(result -> {
-            consumers.forEach(MqttConsumer::onEnd);
+            new ArrayList<>(consumers).forEach(MqttChannel.MqttConsumer::onEnd);
             stopFuture.handle(result.mapEmpty());
         });
     }
 
     @Override public <T> Channel<T> channel(String address, ChannelOptions options)
     {
-        final ChannelCodec<T> codec = injector.getInstance(
-            Key.get(new TypeLiteral<ChannelCodec<T>>() {}, Names.named(options.getCodecName())));
-        final MqttQoS qos = MQTT_QOS.get(options.getQuality());
-        final MqttConsumer<T> consumer = new MqttConsumer<>(address, qos, codec);
-        final MqttProducer<T> producer = new MqttProducer<>();
-
-        return new Channel<T>()
-        {
-            @Override public MessageConsumer<T> consumer()
-            {
-                return consumer;
-            }
-
-            @Override public MessageProducer<T> producer()
-            {
-                return producer;
-            }
-        };
+        return new MqttChannel<>(address, options);
     }
 
-    private void onMessage(MqttPublishMessage message)
-    {
-        consumers.forEach(consumer -> {
-            if (consumer.topicPattern.matcher(message.topicName()).matches())
-                consumer.onMessage(message);
-        });
-    }
-
-    private void onSubscriptionAck(MqttSubAckMessage subAckMessage)
-    {
-        consumers.forEach(consumer -> {
-            if (consumer.subscribeId == subAckMessage.messageId())
-            {
-                try
-                {
-                    final int qosValue = subAckMessage.grantedQoSLevels().get(consumer.ordinal);
-                    final MqttQoS qosReceived = MqttQoS.valueOf(qosValue);
-                    if (qosReceived != consumer.qos)
-                        throw new IllegalStateException(
-                            format("Mismatched QoS: expecting %s, received %s", consumer.qos, qosReceived));
-                    consumer.onSubscribe(succeededFuture());
-                }
-                catch (Exception e)
-                {
-                    final MqttException exception = new MqttException(MQTTASYNC_BAD_QOS, e.getMessage());
-                    exception.initCause(e);
-                    consumer.onSubscribe(failedFuture(exception));
-                }
-            }
-        });
-    }
-
-    private void onUnsubscribeAck(int messageId)
-    {
-        consumers.forEach(consumer -> {
-            if (consumer.unsubscribeId == messageId)
-                consumer.onUnsubscribe();
-        });
-    }
-
-    private class MqttProducer<T> implements MessageProducer<T>
-    {
-        @Override public MessageProducer<T> send(T message)
-        {
-            return null;
-        }
-
-        @Override public <R> MessageProducer<T> send(T message, Handler<AsyncResult<Message<R>>> replyHandler)
-        {
-            return null;
-        }
-
-        @Override public MessageProducer<T> exceptionHandler(Handler<Throwable> handler)
-        {
-            return null;
-        }
-
-        @Override public MessageProducer<T> write(T data)
-        {
-            return null;
-        }
-
-        @Override public MessageProducer<T> setWriteQueueMaxSize(int maxSize)
-        {
-            return null;
-        }
-
-        @Override public boolean writeQueueFull()
-        {
-            return false;
-        }
-
-        @Override public MessageProducer<T> drainHandler(Handler<Void> handler)
-        {
-            return null;
-        }
-
-        @Override public MessageProducer<T> deliveryOptions(DeliveryOptions options)
-        {
-            return null;
-        }
-
-        @Override public String address()
-        {
-            return null;
-        }
-
-        @Override public void end()
-        {
-
-        }
-
-        @Override public void close()
-        {
-
-        }
-    }
-
-    private class MqttConsumer<T> implements MessageConsumer<T>
+    private class MqttChannel<T> implements Channel<T>
     {
         final String topicName;
-        final Pattern topicPattern;
-        final MqttQoS qos;
-        final MessageCodec<?, T> codec;
-        final Handlers<Message<T>> messageHandlers = new Handlers<>();
-        final Handlers<AsyncResult<Void>> subscribeHandlers = new Handlers<>(SINGLE_USE);
-        final Handlers<AsyncResult<Void>> unsubscribeHandler = new Handlers<>(SINGLE_INSTANCE, SINGLE_USE);
-        final Handlers<Void> endHandlers = new Handlers<>(SINGLE_USE);
-        int subscribeId = NO_PACKET, unsubscribeId = NO_PACKET;
-        int ordinal = 0;
-        int bufferSize = MqttEventVertice.this.bufferSize;
-        boolean registered = false;
-        Queue<MqttPublishMessage> buffer;
+        MqttQoS qos;
+        ChannelCodec<T> codec;
+        MqttConsumer consumer;
+        MqttProducer producer;
 
-        MqttConsumer(String topicName, MqttQoS qos, MessageCodec<?, T> codec)
+        MqttChannel(String address, ChannelOptions options)
         {
-            this.topicName = requireNonNull(topicName);
-            this.topicPattern = Pattern.compile(
-                Pattern.quote(topicName).replaceAll("\\+", "[^/]+").replaceAll("#", ".+"));
-            this.qos = requireNonNull(qos);
-            this.codec = codec;
-            consumers.add(this);
+            this.topicName = requireNonNull(address);
+            setDeliveryOptions(options);
         }
 
-        @Override public MessageConsumer<T> handler(Handler<Message<T>> handler)
+        void setDeliveryOptions(DeliveryOptions options)
         {
-            // Subscribe to the given address if we're connected
-            if (connected && !registered)
-                register();
-
-            this.messageHandlers.add(handler);
-            return this;
+            if (options instanceof ChannelOptions)
+                qos = MQTT_QOS.get(((ChannelOptions)options).getQuality());
+            codec = injector.getInstance(
+                Key.get(new TypeLiteral<ChannelCodec<T>>() {}, Names.named(options.getCodecName())));
         }
 
-        @Override public MessageConsumer<T> exceptionHandler(Handler<Throwable> handler)
+        @Override public MessageConsumer<T> consumer()
         {
-            mqtt.exceptionHandler(handler);
-            return this;
+            if (consumer == null)
+                consumer = new MqttConsumer();
+            return consumer;
         }
 
-        @Override public MessageConsumer<T> pause()
+        @Override public MessageProducer<T> producer()
         {
-            buffer = new ArrayBlockingQueue<>(bufferSize);
-            return this;
+            if (producer == null)
+                producer = new MqttProducer();
+            return producer;
         }
 
-        @Override public MessageConsumer<T> resume()
+        class MqttProducer implements MessageProducer<T>
         {
-            while (!buffer.isEmpty())
-                handleMessage(buffer.remove());
-            buffer = null;
-            return this;
-        }
+            int writeQueueMaxSize = bufferSize;
+            final Set<Integer> writesInFlight = new HashSet<>(bufferSize);
+            final Handlers<Void> drainHandlers = new Handlers<>(SINGLE_USE);
+            final Handlers<Throwable> exceptionHandler = new Handlers<>(SINGLE_INSTANCE);
 
-        @Override public MessageConsumer<T> endHandler(Handler<Void> endHandler)
-        {
-            this.endHandlers.add(endHandler);
-            return this;
-        }
+            MqttProducer()
+            {
+                producers.add(this);
+            }
 
-        @Override public ReadStream<T> bodyStream()
-        {
-            return new BodyReadStream<>(this);
-        }
+            @Override public MessageProducer<T> send(T message)
+            {
+                throw new UnsupportedOperationException("Cannot send with MQTT, yet");
+            }
 
-        @Override public boolean isRegistered()
-        {
-            return registered;
-        }
+            @Override public <R> MessageProducer<T> send(T message, Handler<AsyncResult<Message<R>>> replyHandler)
+            {
+                throw new UnsupportedOperationException("Cannot send with MQTT, yet");
+            }
 
-        @Override public String address()
-        {
-            return topicName;
-        }
+            @Override public MessageProducer<T> exceptionHandler(Handler<Throwable> handler)
+            {
+                mqtt.exceptionHandler(handler);
+                exceptionHandler.set(handler);
+                return this;
+            }
 
-        @Override public MessageConsumer<T> setMaxBufferedMessages(int maxBufferedMessages)
-        {
-            this.bufferSize = maxBufferedMessages;
-            return this;
-        }
-
-        @Override public int getMaxBufferedMessages()
-        {
-            return bufferSize;
-        }
-
-        @Override public void completionHandler(Handler<AsyncResult<Void>> completionHandler)
-        {
-            subscribeHandlers.add(completionHandler);
-        }
-
-        @Override public void unregister()
-        {
-            mqtt.unsubscribe(topicName);
-        }
-
-        @Override public void unregister(Handler<AsyncResult<Void>> completionHandler)
-        {
-            unsubscribeHandler.set(completionHandler);
-            mqtt.unsubscribe(topicName, unsubscribeSendResult -> {
-                if (unsubscribeSendResult.succeeded())
-                    unsubscribeId = unsubscribeSendResult.result();
+            @Override public MessageProducer<T> write(T data)
+            {
+                final Buffer buffer = buffer();
+                codec.encodeToWire(buffer, data);
+                if (qos == MqttQoS.AT_MOST_ONCE)
+                    mqtt.publish(topicName, buffer, qos, false, false);
                 else
-                    unsubscribeHandler.handle(failedFuture(unsubscribeSendResult.cause()));
-            });
+                    mqtt.publish(topicName, buffer, qos, false, false, published -> {
+                        if (published.succeeded())
+                            writesInFlight.add(published.result());
+                        else
+                            exceptionHandler.handle(published.cause());
+                    });
+
+                return this;
+            }
+
+            @Override public MessageProducer<T> setWriteQueueMaxSize(int maxSize)
+            {
+                writeQueueMaxSize = maxSize;
+                return this;
+            }
+
+            @Override public boolean writeQueueFull()
+            {
+                return writesInFlight.size() >= writeQueueMaxSize;
+            }
+
+            @Override public MessageProducer<T> drainHandler(Handler<Void> handler)
+            {
+                drainHandlers.add(handler);
+                return this;
+            }
+
+            @Override public MessageProducer<T> deliveryOptions(DeliveryOptions options)
+            {
+                setDeliveryOptions(options);
+                return this;
+            }
+
+            @Override public String address()
+            {
+                return topicName;
+            }
+
+            @Override public void end()
+            {
+                close();
+            }
+
+            @Override public void close()
+            {
+                producers.remove(this);
+            }
+
+            void onPublished(Integer id)
+            {
+                writesInFlight.remove(id);
+                if (writesInFlight.size() < writeQueueMaxSize/2)
+                    drainHandlers.handle(null);
+            }
         }
 
-        void register()
+        class MqttConsumer implements MessageConsumer<T>
         {
-            mqtt.subscribe(topicName, qos.ordinal(), subscribeSendResult -> {
-                if (subscribeSendResult.succeeded())
-                    subscribeId = subscribeSendResult.result();
-                else
-                    onSubscribe(failedFuture(subscribeSendResult.cause()));
-            });
-        }
+            final Handlers<Message<T>> messageHandlers = new Handlers<>();
+            final Handlers<AsyncResult<Void>> subscribeHandlers = new Handlers<>(SINGLE_USE);
+            final Handlers<AsyncResult<Void>> unsubscribeHandler = new Handlers<>(SINGLE_INSTANCE, SINGLE_USE);
+            final Handlers<Void> endHandlers = new Handlers<>(SINGLE_USE);
+            int subscribeId = NO_PACKET, unsubscribeId = NO_PACKET;
+            int ordinal = 0;
+            int maxBufferedMessages = bufferSize;
+            boolean registered = false;
+            Queue<MqttPublishMessage> buffer;
 
-        void onMessage(MqttPublishMessage message)
-        {
-            if (buffer == null)
-                handleMessage(message);
-            else
-                buffer.add(message);
-        }
+            MqttConsumer()
+            {
+                consumers.add(this);
+            }
 
-        void handleMessage(MqttPublishMessage message)
-        {
-            messageHandlers.handle(new MqttMessageEvent<>(message, codec));
-        }
+            @Override public MessageConsumer<T> handler(Handler<Message<T>> handler)
+            {
+                // Subscribe to the given address if we're connected
+                if (connected && !registered)
+                    register();
 
-        void onSubscribe(AsyncResult<Void> result)
-        {
-            subscribeHandlers.handle(result);
-        }
+                this.messageHandlers.add(handler);
+                return this;
+            }
 
-        void onUnsubscribe()
-        {
-            unsubscribeHandler.handle(succeededFuture());
-            onEnd();
-        }
+            @Override public MessageConsumer<T> exceptionHandler(Handler<Throwable> handler)
+            {
+                mqtt.exceptionHandler(handler);
+                return this;
+            }
 
-        void onEnd()
-        {
-            endHandlers.handle(null);
+            @Override public MessageConsumer<T> pause()
+            {
+                buffer = new ArrayBlockingQueue<>(maxBufferedMessages);
+                return this;
+            }
+
+            @Override public MessageConsumer<T> resume()
+            {
+                while (!buffer.isEmpty())
+                    handleMessage(buffer.remove());
+                buffer = null;
+                return this;
+            }
+
+            @Override public MessageConsumer<T> endHandler(Handler<Void> endHandler)
+            {
+                this.endHandlers.add(endHandler);
+                return this;
+            }
+
+            @Override public ReadStream<T> bodyStream()
+            {
+                return new BodyReadStream<>(this);
+            }
+
+            @Override public boolean isRegistered()
+            {
+                return registered;
+            }
+
+            @Override public String address()
+            {
+                return topicName;
+            }
+
+            @Override public MessageConsumer<T> setMaxBufferedMessages(int maxBufferedMessages)
+            {
+                this.maxBufferedMessages = maxBufferedMessages;
+                return this;
+            }
+
+            @Override public int getMaxBufferedMessages()
+            {
+                return maxBufferedMessages;
+            }
+
+            @Override public void completionHandler(Handler<AsyncResult<Void>> completionHandler)
+            {
+                subscribeHandlers.add(completionHandler);
+            }
+
+            @Override public void unregister()
+            {
+                mqtt.unsubscribe(topicName);
+            }
+
+            @Override public void unregister(Handler<AsyncResult<Void>> completionHandler)
+            {
+                unsubscribeHandler.set(completionHandler);
+                mqtt.unsubscribe(topicName, unsubscribeSendResult -> {
+                    if (unsubscribeSendResult.succeeded())
+                        unsubscribeId = unsubscribeSendResult.result();
+                    else
+                        unsubscribeHandler.handle(failedFuture(unsubscribeSendResult.cause()));
+                });
+            }
+
+            void register()
+            {
+                mqtt.subscribe(topicName, qos.ordinal(), subscribeSendResult -> {
+                    if (subscribeSendResult.succeeded())
+                        subscribeId = subscribeSendResult.result();
+                    else
+                        subscribeHandlers.handle(failedFuture(subscribeSendResult.cause()));
+                });
+            }
+
+            void onMessage(MqttPublishMessage message)
+            {
+                if (isMatch(message.topicName(), topicName))
+                {
+                    if (buffer == null)
+                        handleMessage(message);
+                    else
+                        buffer.add(message);
+                }
+            }
+
+            void handleMessage(MqttPublishMessage message)
+            {
+                messageHandlers.handle(new MqttMessageEvent<>(message, codec));
+            }
+
+            void onSubscribeAck(MqttSubAckMessage subAckMessage)
+            {
+                if (subscribeId == subAckMessage.messageId())
+                {
+                    try
+                    {
+                        final int qosValue = subAckMessage.grantedQoSLevels().get(ordinal);
+                        final MqttQoS qosReceived = MqttQoS.valueOf(qosValue);
+                        if (qosReceived != qos)
+                            throw new IllegalStateException(
+                                format("Mismatched QoS: expecting %s, received %s", qos, qosReceived));
+                        subscribeHandlers.handle(succeededFuture());
+                    }
+                    catch (Exception e)
+                    {
+                        final MqttException exception = new MqttException(MQTTASYNC_BAD_QOS, e.getMessage());
+                        exception.initCause(e);
+                        subscribeHandlers.handle(failedFuture(exception));
+                    }
+                }
+            }
+
+            void onUnsubscribeAck(int messageId)
+            {
+                if (unsubscribeId == messageId)
+                {
+                    unsubscribeHandler.handle(succeededFuture());
+                    onEnd();
+                }
+            }
+
+            void onEnd()
+            {
+                endHandlers.handle(null);
+                consumers.remove(this);
+            }
         }
     }
 }

@@ -56,27 +56,27 @@ class MqttMessageEvent<T> implements Message<T>
 
     @Override public void reply(Object message)
     {
-        // Do nothing, MQTT is pub-sub
+        throw new UnsupportedOperationException("Cannot reply with MQTT, yet");
     }
 
     @Override public <R> void reply(Object message, Handler<AsyncResult<Message<R>>> replyHandler)
     {
-        // Do nothing, MQTT is pub-sub
+        throw new UnsupportedOperationException("Cannot reply with MQTT, yet");
     }
 
     @Override public void reply(Object message, DeliveryOptions options)
     {
-        // Do nothing, MQTT is pub-sub
+        throw new UnsupportedOperationException("Cannot reply with MQTT, yet");
     }
 
     @Override public <R> void reply(Object message, DeliveryOptions options,
                                     Handler<AsyncResult<Message<R>>> replyHandler)
     {
-        // Do nothing, MQTT is pub-sub
+        throw new UnsupportedOperationException("Cannot reply with MQTT, yet");
     }
 
     @Override public void fail(int failureCode, String message)
     {
-        // Do nothing, MQTT is pub-sub
+        throw new UnsupportedOperationException("Cannot reply with MQTT, yet");
     }
 }
