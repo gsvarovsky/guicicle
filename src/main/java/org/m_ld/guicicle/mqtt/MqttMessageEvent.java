@@ -19,13 +19,14 @@ class MqttMessageEvent<T> implements Message<T>
     private final MultiMap headers;
     private final T payload;
 
-    public MqttMessageEvent(MqttPublishMessage message, MessageCodec<?, T> codec)
+    public MqttMessageEvent(MqttPublishMessage message, MultiMap headers, MessageCodec<?, T> codec)
     {
         this.message = message;
         this.headers = MultiMap.caseInsensitiveMultiMap();
-        headers.add("isDup", Boolean.toString(message.isDup()));
-        headers.add("isRetain", Boolean.toString(message.isRetain()));
-        headers.add("qosLevel", message.qosLevel().name());
+        this.headers.addAll(headers);
+        this.headers.add("isDup", Boolean.toString(message.isDup()));
+        this.headers.add("isRetain", Boolean.toString(message.isRetain()));
+        this.headers.add("qosLevel", message.qosLevel().name());
         this.payload = codec.decodeFromWire(0, message.payload());
     }
 

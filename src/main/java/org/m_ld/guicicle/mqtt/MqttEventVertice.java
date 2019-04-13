@@ -57,9 +57,9 @@ public class MqttEventVertice implements ChannelProvider, Vertice
         MQTT_QOS.put(ChannelOptions.Quality.AT_LEAST_ONCE, MqttQoS.AT_LEAST_ONCE);
         MQTT_QOS.put(ChannelOptions.Quality.EXACTLY_ONCE, MqttQoS.EXACTLY_ONCE);
     }
-    @Inject(optional = true) @Named("config.mqtt.buffer.size") private int bufferSize = 128;
-    @Inject(optional = true) @Named("config.mqtt.port") private int port = MqttClientOptions.DEFAULT_PORT;
-    @Inject(optional = true) @Named("config.mqtt.host") private String host = MqttClientOptions.DEFAULT_HOST;
+    private int bufferSize = 128;
+    private int port = MqttClientOptions.DEFAULT_PORT;
+    private String host = MqttClientOptions.DEFAULT_HOST;
     private boolean connected = false;
     private final MqttClient mqtt;
     private final Injector injector;
@@ -73,6 +73,21 @@ public class MqttEventVertice implements ChannelProvider, Vertice
         this.injector = injector;
     }
 
+    @Inject(optional = true) @Named("config.mqtt.buffer.size") public void setBufferSize(int bufferSize)
+    {
+        this.bufferSize = bufferSize;
+    }
+
+    @Inject(optional = true) @Named("config.mqtt.port") public void setPort(int port)
+    {
+        this.port = port;
+    }
+
+    @Inject(optional = true) @Named("config.mqtt.host") public void setHost(String host)
+    {
+        this.host = host;
+    }
+
     @Override public void start(Future<Void> startFuture)
     {
         mqtt.publishHandler(msg -> consumers.forEach(c -> c.onMessage(msg)))
@@ -84,7 +99,9 @@ public class MqttEventVertice implements ChannelProvider, Vertice
                 {
                     connected = true;
                     // Register any pre-existing consumers which have a handler
+                    // TODO: The protocol allows doing these in a batch
                     consumers.forEach(MqttChannel.MqttConsumer::register);
+                    producers.forEach(MqttChannel.MqttProducer::register);
                 }
                 startFuture.handle(connectResult.mapEmpty());
             });
@@ -106,6 +123,7 @@ public class MqttEventVertice implements ChannelProvider, Vertice
     private class MqttChannel<T> implements Channel<T>
     {
         final String topicName;
+        DeliveryOptions options;
         MqttQoS qos;
         ChannelCodec<T> codec;
         MqttConsumer consumer;
@@ -119,10 +137,12 @@ public class MqttEventVertice implements ChannelProvider, Vertice
 
         void setDeliveryOptions(DeliveryOptions options)
         {
+            this.options = options;
             if (options instanceof ChannelOptions)
                 qos = MQTT_QOS.get(((ChannelOptions)options).getQuality());
+            //noinspection unchecked
             codec = injector.getInstance(
-                Key.get(new TypeLiteral<ChannelCodec<T>>() {}, Names.named(options.getCodecName())));
+                Key.get(new TypeLiteral<ChannelCodec>() {}, Names.named(options.getCodecName())));
         }
 
         @Override public MessageConsumer<T> consumer()
@@ -142,6 +162,7 @@ public class MqttEventVertice implements ChannelProvider, Vertice
         class MqttProducer implements MessageProducer<T>
         {
             int writeQueueMaxSize = bufferSize;
+            final Queue<T> preFlightBuffer = new LinkedList<>();
             final Set<Integer> writesInFlight = new HashSet<>(bufferSize);
             final Handlers<Void> drainHandlers = new Handlers<>(SINGLE_USE);
             final Handlers<Throwable> exceptionHandler = new Handlers<>(SINGLE_INSTANCE);
@@ -170,18 +191,24 @@ public class MqttEventVertice implements ChannelProvider, Vertice
 
             @Override public MessageProducer<T> write(T data)
             {
-                final Buffer buffer = buffer();
-                codec.encodeToWire(buffer, data);
-                if (qos == MqttQoS.AT_MOST_ONCE)
-                    mqtt.publish(topicName, buffer, qos, false, false);
+                if (connected)
+                {
+                    final Buffer buffer = buffer();
+                    codec.encodeToWire(buffer, data);
+                    if (qos == MqttQoS.AT_MOST_ONCE)
+                        mqtt.publish(topicName, buffer, qos, false, false);
+                    else
+                        mqtt.publish(topicName, buffer, qos, false, false, published -> {
+                            if (published.succeeded())
+                                writesInFlight.add(published.result());
+                            else
+                                exceptionHandler.handle(published.cause());
+                        });
+                }
                 else
-                    mqtt.publish(topicName, buffer, qos, false, false, published -> {
-                        if (published.succeeded())
-                            writesInFlight.add(published.result());
-                        else
-                            exceptionHandler.handle(published.cause());
-                    });
-
+                {
+                    preFlightBuffer.add(data);
+                }
                 return this;
             }
 
@@ -193,7 +220,7 @@ public class MqttEventVertice implements ChannelProvider, Vertice
 
             @Override public boolean writeQueueFull()
             {
-                return writesInFlight.size() >= writeQueueMaxSize;
+                return preFlightBuffer.size() + writesInFlight.size() >= writeQueueMaxSize;
             }
 
             @Override public MessageProducer<T> drainHandler(Handler<Void> handler)
@@ -223,6 +250,12 @@ public class MqttEventVertice implements ChannelProvider, Vertice
                 producers.remove(this);
             }
 
+            void register()
+            {
+                while (!preFlightBuffer.isEmpty())
+                    write(preFlightBuffer.remove());
+            }
+
             void onPublished(Integer id)
             {
                 writesInFlight.remove(id);
@@ -241,7 +274,7 @@ public class MqttEventVertice implements ChannelProvider, Vertice
             int ordinal = 0;
             int maxBufferedMessages = bufferSize;
             boolean registered = false;
-            Queue<MqttPublishMessage> buffer;
+            Queue<MqttPublishMessage> pauseBuffer;
 
             MqttConsumer()
             {
@@ -266,15 +299,15 @@ public class MqttEventVertice implements ChannelProvider, Vertice
 
             @Override public MessageConsumer<T> pause()
             {
-                buffer = new ArrayBlockingQueue<>(maxBufferedMessages);
+                pauseBuffer = new ArrayBlockingQueue<>(maxBufferedMessages);
                 return this;
             }
 
             @Override public MessageConsumer<T> resume()
             {
-                while (!buffer.isEmpty())
-                    handleMessage(buffer.remove());
-                buffer = null;
+                while (!pauseBuffer.isEmpty())
+                    handleMessage(pauseBuffer.remove());
+                pauseBuffer = null;
                 return this;
             }
 
@@ -345,16 +378,16 @@ public class MqttEventVertice implements ChannelProvider, Vertice
             {
                 if (isMatch(message.topicName(), topicName))
                 {
-                    if (buffer == null)
+                    if (pauseBuffer == null)
                         handleMessage(message);
                     else
-                        buffer.add(message);
+                        pauseBuffer.add(message);
                 }
             }
 
             void handleMessage(MqttPublishMessage message)
             {
-                messageHandlers.handle(new MqttMessageEvent<>(message, codec));
+                messageHandlers.handle(new MqttMessageEvent<>(message, options.getHeaders(), codec));
             }
 
             void onSubscribeAck(MqttSubAckMessage subAckMessage)
