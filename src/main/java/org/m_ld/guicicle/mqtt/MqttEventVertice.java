@@ -27,12 +27,10 @@ import io.vertx.mqtt.MqttClientOptions;
 import io.vertx.mqtt.MqttException;
 import io.vertx.mqtt.messages.MqttPublishMessage;
 import io.vertx.mqtt.messages.MqttSubAckMessage;
+import org.jetbrains.annotations.NotNull;
 import org.m_ld.guicicle.Handlers;
 import org.m_ld.guicicle.Vertice;
-import org.m_ld.guicicle.channel.Channel;
-import org.m_ld.guicicle.channel.ChannelCodec;
-import org.m_ld.guicicle.channel.ChannelOptions;
-import org.m_ld.guicicle.channel.ChannelProvider;
+import org.m_ld.guicicle.channel.*;
 
 import java.util.*;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -117,17 +115,19 @@ public class MqttEventVertice implements ChannelProvider, Vertice
 
     @Override public <T> Channel<T> channel(String address, ChannelOptions options)
     {
+        if (options.getDelivery() == ChannelOptions.Delivery.SEND)
+            throw new UnsupportedOperationException("Cannot send with MQTT, yet");
+
         return new MqttChannel<>(address, options);
     }
 
-    private class MqttChannel<T> implements Channel<T>
+    private class MqttChannel<T> extends AbstractChannel<T>
     {
         final String topicName;
+        final Handlers<AsyncResult<Object>> producedHandlers = new Handlers<>();
         DeliveryOptions options;
         MqttQoS qos;
         ChannelCodec<T> codec;
-        MqttConsumer consumer;
-        MqttProducer producer;
 
         MqttChannel(String address, ChannelOptions options)
         {
@@ -145,25 +145,26 @@ public class MqttEventVertice implements ChannelProvider, Vertice
                 Key.get(new TypeLiteral<ChannelCodec>() {}, Names.named(options.getCodecName())));
         }
 
-        @Override public MessageConsumer<T> consumer()
+        @Override protected @NotNull MessageConsumer<T> createConsumer()
         {
-            if (consumer == null)
-                consumer = new MqttConsumer();
-            return consumer;
+            return new MqttConsumer();
         }
 
-        @Override public MessageProducer<T> producer()
+        @Override protected @NotNull MessageProducer<T> createProducer()
         {
-            if (producer == null)
-                producer = new MqttProducer();
-            return producer;
+            return new MqttProducer();
+        }
+
+        @Override public Channel<T> producedHandler(Handler<AsyncResult<Object>> producedHandler)
+        {
+            producedHandlers.add(producedHandler);
+            return this;
         }
 
         class MqttProducer implements MessageProducer<T>
         {
             int writeQueueMaxSize = bufferSize;
-            final Queue<T> preFlightBuffer = new LinkedList<>();
-            final Set<Integer> writesInFlight = new HashSet<>(bufferSize);
+            final Map<Object, T> writesInFlight = new LinkedHashMap<>(bufferSize);
             final Handlers<Void> drainHandlers = new Handlers<>(SINGLE_USE);
             final Handlers<Throwable> exceptionHandler = new Handlers<>(SINGLE_INSTANCE);
 
@@ -177,7 +178,8 @@ public class MqttEventVertice implements ChannelProvider, Vertice
                 throw new UnsupportedOperationException("Cannot send with MQTT, yet");
             }
 
-            @Override public <R> MessageProducer<T> send(T message, Handler<AsyncResult<Message<R>>> replyHandler)
+            @Override public <R> MessageProducer<T> send(T message,
+                                                         Handler<AsyncResult<Message<R>>> replyHandler)
             {
                 throw new UnsupportedOperationException("Cannot send with MQTT, yet");
             }
@@ -189,25 +191,26 @@ public class MqttEventVertice implements ChannelProvider, Vertice
                 return this;
             }
 
-            @Override public MessageProducer<T> write(T data)
+            @Override public MessageProducer<T> write(T message)
             {
                 if (connected)
                 {
                     final Buffer buffer = buffer();
-                    codec.encodeToWire(buffer, data);
+                    codec.encodeToWire(buffer, message);
                     if (qos == MqttQoS.AT_MOST_ONCE)
                         mqtt.publish(topicName, buffer, qos, false, false);
                     else
                         mqtt.publish(topicName, buffer, qos, false, false, published -> {
                             if (published.succeeded())
-                                writesInFlight.add(published.result());
+                                writesInFlight.put(published.result(), message);
                             else
-                                exceptionHandler.handle(published.cause());
+                                producedHandlers.handle(published.mapEmpty());
                         });
                 }
                 else
                 {
-                    preFlightBuffer.add(data);
+                    // Relying on the quaranteed ordering of the LinkedHashMap
+                    writesInFlight.put(new Object(), message);
                 }
                 return this;
             }
@@ -220,7 +223,7 @@ public class MqttEventVertice implements ChannelProvider, Vertice
 
             @Override public boolean writeQueueFull()
             {
-                return preFlightBuffer.size() + writesInFlight.size() >= writeQueueMaxSize;
+                return writesInFlight.size() >= writeQueueMaxSize;
             }
 
             @Override public MessageProducer<T> drainHandler(Handler<Void> handler)
@@ -252,15 +255,21 @@ public class MqttEventVertice implements ChannelProvider, Vertice
 
             void register()
             {
-                while (!preFlightBuffer.isEmpty())
-                    write(preFlightBuffer.remove());
+                // Drain down the queue
+                final ArrayList<T> messages = new ArrayList<>(writesInFlight.values());
+                writesInFlight.clear();
+                messages.forEach(this::write);
             }
 
             void onPublished(Integer id)
             {
-                writesInFlight.remove(id);
-                if (writesInFlight.size() < writeQueueMaxSize/2)
-                    drainHandlers.handle(null);
+                final T message = writesInFlight.remove(id);
+                if (message != null)
+                {
+                    producedHandlers.handle(succeededFuture(message));
+                    if (writesInFlight.size() < writeQueueMaxSize/2)
+                        drainHandlers.handle(null);
+                }
             }
         }
 
@@ -308,6 +317,12 @@ public class MqttEventVertice implements ChannelProvider, Vertice
                 while (!pauseBuffer.isEmpty())
                     handleMessage(pauseBuffer.remove());
                 pauseBuffer = null;
+                return this;
+            }
+
+            @Override public MessageConsumer<T> fetch(long amount)
+            {
+                // TODO: Handle back-pressure with our buffer, not just on pause
                 return this;
             }
 
@@ -387,7 +402,7 @@ public class MqttEventVertice implements ChannelProvider, Vertice
 
             void handleMessage(MqttPublishMessage message)
             {
-                messageHandlers.handle(new MqttMessageEvent<>(message, options.getHeaders(), codec));
+                messageHandlers.handle(new MqttEventMessage<>(message, options.getHeaders(), codec));
             }
 
             void onSubscribeAck(MqttSubAckMessage subAckMessage)

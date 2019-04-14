@@ -29,6 +29,8 @@ import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnitRunner;
 
+import java.util.HashSet;
+import java.util.Set;
 import java.util.UUID;
 
 import static io.vertx.core.Future.future;
@@ -131,9 +133,11 @@ public class MqttEventVerticeTest
     @Test public void testWriteEventAtLeastOnce()
     {
         final MqttEventVertice mqttEvents = new MqttEventVertice(mqtt, injector);
+        final Set<Object> sentMessages = new HashSet<>();
         mqttEvents.start(future());
-        final Channel<UUID> channel = mqttEvents.channel(
-            "channel", new ChannelOptions().setCodecName("UUID").setQuality(AT_LEAST_ONCE));
+        final Channel<UUID> channel = mqttEvents.<UUID>channel(
+            "channel", new ChannelOptions().setCodecName("UUID").setQuality(AT_LEAST_ONCE))
+            .producedHandler(sendResult -> sentMessages.add(sendResult.result()));
         final UUID value = UUID.randomUUID();
         final MessageProducer<UUID> producer = channel.producer();
         producer.setWriteQueueMaxSize(1).write(value);
@@ -141,8 +145,10 @@ public class MqttEventVerticeTest
                              eq(false), eq(false), publishSentCaptor.capture());
         assertEquals(uuidCodec.decodeFromWire(0, bufferCaptor.getValue()), value);
         publishSentCaptor.getValue().handle(succeededFuture(1));
+        assertFalse(sentMessages.contains(value));
         assertTrue(producer.writeQueueFull());
         publishCompleteCaptor.getValue().handle(1);
         assertFalse(producer.writeQueueFull());
+        assertTrue(sentMessages.contains(value));
     }
 }

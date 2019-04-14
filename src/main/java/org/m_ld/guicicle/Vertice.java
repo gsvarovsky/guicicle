@@ -10,6 +10,11 @@ import io.vertx.core.Future;
 /**
  * A "Vert(.x Serv)ice" is an injectable Verticle-like singleton that is {@link #start}ed and {@link #stop}ped from a
  * single controlling Guicicle.
+ * <p>
+ * Vertices are not started in any specific order, so in the case of inter-dependencies, they must be tolerant of
+ * un-started dependencies such as by providing a start listener.
+ * <p>
+ * This interface is simplified from {@link io.vertx.core.AbstractVerticle} and so duplicates some of its documentation.
  */
 public interface Vertice
 {
@@ -20,8 +25,13 @@ public interface Vertice
      * {@link io.vertx.core.Future#complete} or {@link io.vertx.core.Future#fail} the future.
      *
      * @param startFuture the future
+     * @see io.vertx.core.AbstractVerticle#start(Future)
      */
-    void start(Future<Void> startFuture);
+    default void start(Future<Void> startFuture)
+    {
+        start();
+        startFuture.complete();
+    }
 
     /**
      * Stop the vertice instance.
@@ -30,6 +40,31 @@ public interface Vertice
      * {@link io.vertx.core.Future#complete} or {@link io.vertx.core.Future#fail} the future.
      *
      * @param stopFuture the future
+     * @see io.vertx.core.AbstractVerticle#stop(Future)
      */
-    void stop(Future<Void> stopFuture);
+    default void stop(Future<Void> stopFuture)
+    {
+        stop();
+        stopFuture.complete();
+    }
+
+    /**
+     * If your vertice does a simple, synchronous start-up then override this method and put your start-up
+     * code in here.
+     *
+     * @see io.vertx.core.AbstractVerticle#start()
+     */
+    default void start()
+    {
+    }
+
+    /**
+     * If your verticle has simple synchronous clean-up tasks to complete then override this method and put your
+     * clean-up code in here.
+     *
+     * @see io.vertx.core.AbstractVerticle#stop()
+     */
+    default void stop()
+    {
+    }
 }

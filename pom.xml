@@ -14,8 +14,8 @@
     <version>0.1.0</version>
 
     <properties>
-        <guice.version>4.1.0</guice.version>
-        <vertx.version>3.5.4</vertx.version>
+        <guice.version>4.2.2</guice.version>
+        <vertx.version>3.7.0</vertx.version>
         <jackson.version>2.9.8</jackson.version>
     </properties>
 

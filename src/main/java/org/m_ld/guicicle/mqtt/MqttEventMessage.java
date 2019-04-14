@@ -12,21 +12,22 @@ import io.vertx.core.eventbus.DeliveryOptions;
 import io.vertx.core.eventbus.Message;
 import io.vertx.core.eventbus.MessageCodec;
 import io.vertx.mqtt.messages.MqttPublishMessage;
+import org.m_ld.guicicle.channel.Channel;
 
-class MqttMessageEvent<T> implements Message<T>
+class MqttEventMessage<T> implements Message<T>
 {
     private final MqttPublishMessage message;
     private final MultiMap headers;
     private final T payload;
 
-    public MqttMessageEvent(MqttPublishMessage message, MultiMap headers, MessageCodec<?, T> codec)
+    public MqttEventMessage(MqttPublishMessage message, MultiMap headers, MessageCodec<?, T> codec)
     {
         this.message = message;
         this.headers = MultiMap.caseInsensitiveMultiMap();
         this.headers.addAll(headers);
-        this.headers.add("isDup", Boolean.toString(message.isDup()));
-        this.headers.add("isRetain", Boolean.toString(message.isRetain()));
-        this.headers.add("qosLevel", message.qosLevel().name());
+        this.headers.add("mqtt.isDup", Boolean.toString(message.isDup()));
+        this.headers.add("mqtt.isRetain", Boolean.toString(message.isRetain()));
+        this.headers.add("mqtt.qosLevel", message.qosLevel().name());
         this.payload = codec.decodeFromWire(0, message.payload());
     }
 
@@ -47,7 +48,7 @@ class MqttMessageEvent<T> implements Message<T>
 
     @Override public String replyAddress()
     {
-        return null; // MQTT is pub-sub
+        throw new UnsupportedOperationException("Cannot reply with MQTT, yet");
     }
 
     @Override public boolean isSend()
@@ -55,6 +56,12 @@ class MqttMessageEvent<T> implements Message<T>
         return false; // MQTT is pub-sub
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * The channel will notify whether the message has been successfully sent via its {@link
+     * Channel#producedHandler(Handler)}.
+     */
     @Override public void reply(Object message)
     {
         throw new UnsupportedOperationException("Cannot reply with MQTT, yet");
