@@ -109,7 +109,7 @@ public class VertxCoreModule extends AbstractModule
         };
     }
 
-    @Provides Executor blockingExecutor(Vertx vertx)
+    @Provides @Blocking Executor blockingExecutor(Vertx vertx)
     {
         return runnable -> vertx.executeBlocking(future -> {
             runnable.run();

@@ -198,14 +198,19 @@ public class MqttEventVertice implements ChannelProvider, Vertice
                     final Buffer buffer = buffer();
                     codec.encodeToWire(buffer, message);
                     if (qos == MqttQoS.AT_MOST_ONCE)
+                    {
                         mqtt.publish(topicName, buffer, qos, false, false);
+                        producedHandlers.handle(succeededFuture(message));
+                    }
                     else
+                    {
                         mqtt.publish(topicName, buffer, qos, false, false, published -> {
                             if (published.succeeded())
                                 writesInFlight.put(published.result(), message);
                             else
                                 producedHandlers.handle(published.mapEmpty());
                         });
+                    }
                 }
                 else
                 {
