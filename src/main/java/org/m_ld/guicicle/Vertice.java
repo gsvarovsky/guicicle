@@ -5,7 +5,14 @@
 
 package org.m_ld.guicicle;
 
+import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
+import io.vertx.core.Handler;
+import io.vertx.core.Vertx;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.function.BiConsumer;
 
 /**
  * A "Vert(.x Serv)ice" is an injectable Verticle-like singleton that is {@link #start}ed and {@link #stop}ped from a
@@ -66,5 +73,63 @@ public interface Vertice
      */
     default void stop()
     {
+    }
+
+    /**
+     * Converts a Vert.x fluent-style asynchronous API call to Promise-style, returning a {@code Future} and discarding
+     * the redundant current object return value.
+     *
+     * @param fluentApi the fluent API, normally returning the callee.
+     * @param param     the parameter of the fluent API call
+     * @param <T>       the asynchronous result type
+     * @param <P>       the parameter type
+     * @return a {@code Future} (promise) of the API result
+     */
+    static <T, P> Future<T> when(BiConsumer<P, Handler<AsyncResult<T>>> fluentApi, P param)
+    {
+        final Future<T> future = Future.future();
+        fluentApi.accept(param, future);
+        return future;
+    }
+
+    /**
+     * Converts a Vert.x future to a Java util completion stage. The returned stage will be completed on the Vert.x
+     * event thread.
+     *
+     * @param future the Vert.x future
+     * @param <T>    the result type
+     * @return a Java util completion stage
+     */
+    static <T> CompletionStage<T> fromFuture(Future<T> future)
+    {
+        final CompletableFuture<T> completableFuture = new CompletableFuture<>();
+        future.setHandler(result -> {
+            if (result.succeeded())
+                completableFuture.complete(result.result());
+            else
+                completableFuture.completeExceptionally(result.cause());
+        });
+        return completableFuture;
+    }
+
+    /**
+     * Converts a Java util completion stage into a Vert.x future. The future is guaranteed to be completed on the
+     * Vert.x event thread.
+     *
+     * @param stage the Java util completion stage
+     * @param vertx the Vert.x instance
+     * @param <T> the result type
+     * @return a Vert.x future
+     */
+    static <T> Future<T> toFuture(CompletionStage<T> stage, Vertx vertx)
+    {
+        final Future<T> future = Future.future();
+        stage.whenComplete((value, error) -> vertx.runOnContext(v -> {
+            if (error == null)
+                future.complete(value);
+            else
+                future.fail(error);
+        }));
+        return future;
     }
 }
