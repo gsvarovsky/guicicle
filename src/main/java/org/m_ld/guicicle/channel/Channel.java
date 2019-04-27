@@ -5,19 +5,18 @@
 
 package org.m_ld.guicicle.channel;
 
+import io.netty.handler.codec.http.HttpResponseStatus;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
+import io.vertx.core.eventbus.DeliveryOptions;
 import io.vertx.core.eventbus.Message;
 import io.vertx.core.eventbus.MessageConsumer;
 import io.vertx.core.eventbus.MessageProducer;
+import org.jetbrains.annotations.Nullable;
 import org.m_ld.guicicle.Vertice;
 
-import java.util.function.Function;
-
-import static io.netty.handler.codec.http.HttpResponseStatus.INTERNAL_SERVER_ERROR;
-
-public interface Channel<T>
+public interface Channel<T> extends ChannelProvider
 {
     /**
      * @return a channel consumer, for receiving messages from the channel.
@@ -30,46 +29,72 @@ public interface Channel<T>
     MessageProducer<T> producer();
 
     /**
+     * Create a sub-channel with the given address and options.
+     * <p>
+     * The created channel will be scoped to this one and will not conflict with channels created directly from this
+     * channel's provider. The returned channel's {@link #consumer()} may report a more specific address than given.
+     *
+     * @param address the sub-channel address (will be scoped to this channel)
+     * @param options the channel options
+     * @param <E>     the message type
+     * @return the sub-channel, ready to use
+     */
+    @Override <E> Channel<E> channel(String address, ChannelOptions options);
+
+    /**
      * Sets a handler on the channel that is notified when a message is successfully produced to the channel, and is
      * now subject to the channel's {@link ChannelOptions.Quality quality of service}.
      * <p>
      * This handler also applies to replies made on messages delivered to the {@link #consumer()}, but in this case may
-     * be subject to a different quality of service based on the requested {@link io.vertx.core.eventbus.DeliveryOptions}.
+     * be subject to a different quality of service based on the reply's delivery options.
+     *
+     * @see Message#reply(Object, DeliveryOptions)
      */
     Channel<T> producedHandler(Handler<AsyncResult<Object>> producedHandler);
+
+    /**
+     * @return a copy of the current channel options. Note that these can change after channel provision.
+     * @see ChannelProvider#channel(String, ChannelOptions)
+     * @see MessageProducer#deliveryOptions(DeliveryOptions)
+     */
+    ChannelOptions options();
 
     /**
      * Utility to make a request to the channel producer, expecting a response via a {@code Future}.
      *
      * @param request the request to the channel
      * @param <R>     the response type
-     * @return the response, which may be failed
+     * @return the future response, which may be failed
      */
-    default <R> Future<R> request(T request)
+    default <R> Future<Message<R>> request(T request)
     {
-        return Vertice.<Message<R>, T>when(producer()::send, request).map(Message::body);
+        return Vertice.when(producer()::send, request);
     }
 
     /**
-     * Utility to add a responder to the channel, which replies to requests using the given async function. If the
-     * response is failed, the request is failed with a generic server error, and the given local {@code
-     * exceptionHandler} is notified.
+     * Utility to reply to a requests using the given async response. If the response is failed, the request is failed
+     * with an error code provided by the {@link #options()}.
+     * <p>
+     * If an {@code ack} is given, it will be provided with any response acknowledgement.
      *
-     * @param responder        takes a request from the channel and produces a future response
-     * @param exceptionHandler called in case of a failed response
+     * @param request  the request
+     * @param response the asynchronous response
+     * @param ack      an optional future which will be completed when the response is acknowledged
      */
-    default void respond(Function<T, Future<?>> responder, Handler<Throwable> exceptionHandler)
+    default <R> void respond(Message<T> request, AsyncResult<?> response,
+                             @Nullable Handler<AsyncResult<Message<R>>> ack)
     {
-        consumer().handler(msg -> responder.apply(msg.body()).setHandler(result -> {
-            if (result.succeeded())
-            {
-                msg.reply(result.result());
-            }
+        if (response.succeeded())
+        {
+            if (ack == null)
+                request.reply(response.result());
             else
-            {
-                msg.fail(INTERNAL_SERVER_ERROR.code(), INTERNAL_SERVER_ERROR.reasonPhrase());
-                exceptionHandler.handle(result.cause());
-            }
-        }));
+                request.reply(response.result(), ack);
+        }
+        else
+        {
+            final HttpResponseStatus status = options().getStatusForError(response.cause());
+            request.fail(status.code(), status.reasonPhrase());
+        }
     }
 }

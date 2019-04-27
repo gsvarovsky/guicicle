@@ -81,11 +81,11 @@ public interface Vertice
      *
      * @param fluentApi the fluent API, normally returning the callee.
      * @param param     the parameter of the fluent API call
-     * @param <T>       the asynchronous result type
      * @param <P>       the parameter type
+     * @param <T>       the asynchronous result type
      * @return a {@code Future} (promise) of the API result
      */
-    static <T, P> Future<T> when(BiConsumer<P, Handler<AsyncResult<T>>> fluentApi, P param)
+    static <P, T> Future<T> when(BiConsumer<P, Handler<AsyncResult<T>>> fluentApi, P param)
     {
         final Future<T> future = Future.future();
         fluentApi.accept(param, future);

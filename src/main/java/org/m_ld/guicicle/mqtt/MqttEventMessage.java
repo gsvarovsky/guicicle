@@ -28,6 +28,7 @@ class MqttEventMessage<T> implements Message<T>
         this.headers.add("mqtt.isDup", Boolean.toString(message.isDup()));
         this.headers.add("mqtt.isRetain", Boolean.toString(message.isRetain()));
         this.headers.add("mqtt.qosLevel", message.qosLevel().name());
+        this.headers.add("mqtt.messageId", Integer.toString(message.messageId()));
         this.payload = codec.decodeFromWire(0, message.payload());
     }
 

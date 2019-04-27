@@ -5,11 +5,10 @@
 
 package org.m_ld.guicicle.channel;
 
+import com.google.common.reflect.Reflection;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Handler;
-import io.vertx.core.Vertx;
-import io.vertx.core.eventbus.DeliveryOptions;
-import io.vertx.core.eventbus.Message;
+import io.vertx.core.eventbus.EventBus;
 import io.vertx.core.eventbus.MessageConsumer;
 import io.vertx.core.eventbus.MessageProducer;
 import org.jetbrains.annotations.NotNull;
@@ -19,14 +18,14 @@ import static io.vertx.core.Future.succeededFuture;
 
 public class EventBusChannel<T> extends AbstractChannel<T>
 {
-    private final Vertx vertx;
+    private final EventBus eventBus;
     private final String address;
     private final ChannelOptions options;
     private final Handlers<AsyncResult<Object>> producedHandlers = new Handlers<>();
 
-    public EventBusChannel(Vertx vertx, String address, ChannelOptions options)
+    public EventBusChannel(EventBus eventBus, String address, ChannelOptions options)
     {
-        this.vertx = vertx;
+        this.eventBus = eventBus;
         this.address = address;
         this.options = options;
 
@@ -36,98 +35,43 @@ public class EventBusChannel<T> extends AbstractChannel<T>
 
     @Override protected @NotNull MessageConsumer<T> createConsumer()
     {
-        return vertx.eventBus().consumer(address);
+        return eventBus.consumer(address);
     }
 
     @Override protected @NotNull MessageProducer<T> createProducer()
     {
-        final MessageProducer<T> producer;
-        switch (options.getDelivery())
-        {
-            case SEND:
-                producer = vertx.eventBus().sender(address, options);
-                break;
-            case PUBLISH:
-                producer = vertx.eventBus().publisher(address, options);
-                break;
-            default:
-                throw new AssertionError();
-        }
-        return new MessageProducer<T>()
-        {
-            @Override public MessageProducer<T> send(T message)
-            {
-                producer.send(message);
-                return produced(message);
-            }
+        final MessageProducer<T> producer = options.getDelivery() == ChannelOptions.Delivery.SEND ?
+            eventBus.sender(address, options) : eventBus.publisher(address, options);
 
-            @Override public <R> MessageProducer<T> send(T message, Handler<AsyncResult<Message<R>>> replyHandler)
-            {
-                producer.send(message, replyHandler);
-                return produced(message);
-            }
-
-            @Override public MessageProducer<T> exceptionHandler(Handler<Throwable> handler)
-            {
-                producer.exceptionHandler(handler);
-                return this;
-            }
-
-            @Override public MessageProducer<T> write(T message)
-            {
-                producer.write(message);
-                return produced(message);
-            }
-
-            @Override public MessageProducer<T> setWriteQueueMaxSize(int maxSize)
-            {
-                producer.setWriteQueueMaxSize(maxSize);
-                return this;
-            }
-
-            @Override public MessageProducer<T> drainHandler(Handler<Void> handler)
-            {
-                producer.drainHandler(handler);
-                return this;
-            }
-
-            @Override public MessageProducer<T> deliveryOptions(DeliveryOptions options)
-            {
-                producer.deliveryOptions(options);
-                return this;
-            }
-
-            @Override public String address()
-            {
-                return producer.address();
-            }
-
-            @Override public void end()
-            {
-                close();
-            }
-
-            @Override public void close()
-            {
-                producer.close();
-            }
-
-            @Override public boolean writeQueueFull()
-            {
-                return producer.writeQueueFull();
-            }
-
-            @NotNull private MessageProducer<T> produced(T message)
-            {
-                producedHandlers.handle(succeededFuture(message));
-                return this;
-            }
-        };
+        //noinspection UnstableApiUsage, unchecked
+        return Reflection.newProxy(MessageProducer.class, (proxy, method, args) -> {
+            final Object rtn = method.invoke(producer, args);
+            // The event bus is AT_MOST_ONCE, so immediately notify the handler
+            if ("send".equals(method.getName()) || "write".equals(method.getName()))
+                producedHandlers.handle(succeededFuture(args[0]));
+            // Maintain fluent chaining
+            return rtn instanceof MessageProducer ? proxy : rtn;
+        });
     }
 
     @Override public Channel<T> producedHandler(Handler<AsyncResult<Object>> producedHandler)
     {
         producedHandlers.add(producedHandler);
         return this;
+    }
+
+    @Override public ChannelOptions options()
+    {
+        return new ChannelOptions(options);
+    }
+
+    @Override public <E> Channel<E> channel(String address, ChannelOptions options)
+    {
+        return new EventBusChannel<>(eventBus, subAddress(address), options);
+    }
+
+    private String subAddress(String address)
+    {
+        return this.address + '.' + address;
     }
 }

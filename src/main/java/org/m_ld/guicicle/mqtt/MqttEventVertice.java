@@ -125,24 +125,39 @@ public class MqttEventVertice implements ChannelProvider, Vertice
     {
         final String topicName;
         final Handlers<AsyncResult<Object>> producedHandlers = new Handlers<>();
-        DeliveryOptions options;
+        ChannelOptions options;
         MqttQoS qos;
         ChannelCodec<T> codec;
 
         MqttChannel(String address, ChannelOptions options)
         {
             this.topicName = requireNonNull(address);
-            setDeliveryOptions(options);
+            setOptions(options);
         }
 
-        void setDeliveryOptions(DeliveryOptions options)
+        void setOptions(ChannelOptions options)
         {
             this.options = options;
-            if (options instanceof ChannelOptions)
-                qos = MQTT_QOS.get(((ChannelOptions)options).getQuality());
+            qos = MQTT_QOS.get(options.getQuality());
             //noinspection unchecked
             codec = injector.getInstance(
                 Key.get(new TypeLiteral<ChannelCodec>() {}, Names.named(options.getCodecName())));
+        }
+
+        @Override public <E> Channel<E> channel(String address, ChannelOptions options)
+        {
+            return new MqttChannel<>(this.topicName + '/' + address, options);
+        }
+
+        @Override public Channel<T> producedHandler(Handler<AsyncResult<Object>> producedHandler)
+        {
+            producedHandlers.add(producedHandler);
+            return this;
+        }
+
+        @Override public ChannelOptions options()
+        {
+            return options;
         }
 
         @Override protected @NotNull MessageConsumer<T> createConsumer()
@@ -153,12 +168,6 @@ public class MqttEventVertice implements ChannelProvider, Vertice
         @Override protected @NotNull MessageProducer<T> createProducer()
         {
             return new MqttProducer();
-        }
-
-        @Override public Channel<T> producedHandler(Handler<AsyncResult<Object>> producedHandler)
-        {
-            producedHandlers.add(producedHandler);
-            return this;
         }
 
         class MqttProducer implements MessageProducer<T>
@@ -239,7 +248,7 @@ public class MqttEventVertice implements ChannelProvider, Vertice
 
             @Override public MessageProducer<T> deliveryOptions(DeliveryOptions options)
             {
-                setDeliveryOptions(options);
+                MqttChannel.this.options.setDeliveryOptions(options);
                 return this;
             }
 

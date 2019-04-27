@@ -27,5 +27,13 @@ public interface ChannelProvider
     @BindingAnnotation @Target({ FIELD, PARAMETER, METHOD }) @Retention(RUNTIME)
     @interface Central {}
 
+    /**
+     * Creates a channel for the given address, using the given channel options.
+     *
+     * @param address the channel address
+     * @param options the channel options
+     * @param <T> the message type
+     * @return the channel, ready to use
+     */
     <T> Channel<T> channel(String address, ChannelOptions options);
 }

@@ -17,6 +17,7 @@ import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import org.m_ld.guicicle.channel.*;
 import org.m_ld.guicicle.channel.ChannelProvider.Local;
+import org.m_ld.guicicle.http.ResponseStatusMapper;
 
 import javax.inject.Named;
 import java.util.List;
@@ -98,13 +99,13 @@ public class VertxCoreModule extends AbstractModule
         return vertx.createHttpServer(httpServerOptions);
     }
 
-    @Provides @Local ChannelProvider eventBusChannels(Vertx vertx)
+    @Provides @Local ChannelProvider eventBusChannels(Vertx vertx, ResponseStatusMapper statusMapper)
     {
         return new ChannelProvider()
         {
             @Override public <T> Channel<T> channel(String address, ChannelOptions options)
             {
-                return new EventBusChannel<>(vertx, address, options);
+                return new EventBusChannel<>(vertx.eventBus(), address, options);
             }
         };
     }
@@ -123,5 +124,10 @@ public class VertxCoreModule extends AbstractModule
     @ProvidesIntoSet ChannelCodec uuidCodec()
     {
         return new UuidCodec();
+    }
+
+    @Provides ResponseStatusMapper defaultResponseStatusMapper()
+    {
+        return ResponseStatusMapper.DEFAULT;
     }
 }
