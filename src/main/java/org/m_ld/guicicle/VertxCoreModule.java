@@ -11,15 +11,13 @@ import com.google.inject.Singleton;
 import com.google.inject.multibindings.ProvidesIntoSet;
 import com.google.inject.name.Names;
 import io.vertx.core.Vertx;
-import io.vertx.core.http.HttpServer;
-import io.vertx.core.http.HttpServerOptions;
+import io.vertx.core.eventbus.EventBus;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import org.m_ld.guicicle.channel.*;
 import org.m_ld.guicicle.channel.ChannelProvider.Local;
 import org.m_ld.guicicle.http.ResponseStatusMapper;
 
-import javax.inject.Named;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -89,14 +87,9 @@ public class VertxCoreModule extends AbstractModule
         return vertx;
     }
 
-    @Provides HttpServerOptions httpServerOptions(@Named("config.http") JsonObject httpOptions)
+    @Provides EventBus eventBus(Vertx vertx)
     {
-        return new HttpServerOptions(httpOptions);
-    }
-
-    @Provides HttpServer httpServer(HttpServerOptions httpServerOptions)
-    {
-        return vertx.createHttpServer(httpServerOptions);
+        return vertx.eventBus();
     }
 
     @Provides @Local ChannelProvider eventBusChannels(Vertx vertx, ResponseStatusMapper statusMapper)
