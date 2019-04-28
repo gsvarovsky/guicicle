@@ -248,7 +248,10 @@ public class MqttEventVertice implements ChannelProvider, Vertice
 
             @Override public MessageProducer<T> deliveryOptions(DeliveryOptions options)
             {
-                MqttChannel.this.options.setDeliveryOptions(options);
+                if (options instanceof ChannelOptions)
+                    setOptions((ChannelOptions)options);
+                else
+                    MqttChannel.this.options.setDeliveryOptions(options);
                 return this;
             }
 

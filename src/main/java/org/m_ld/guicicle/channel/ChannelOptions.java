@@ -33,6 +33,7 @@ public class ChannelOptions extends DeliveryOptions implements ResponseStatusMap
     private Delivery delivery = Delivery.PUBLISH;
     private Quality quality = Quality.AT_MOST_ONCE;
     private Map<String, HttpResponseStatus> statuses = new HashMap<>();
+    private boolean echo = false;
 
     public ChannelOptions()
     {
@@ -44,6 +45,7 @@ public class ChannelOptions extends DeliveryOptions implements ResponseStatusMap
         this.delivery = other.delivery;
         this.quality = other.quality;
         this.statuses.putAll(other.statuses);
+        this.echo = other.echo;
     }
 
     public ChannelOptions(JsonObject json)
@@ -56,6 +58,8 @@ public class ChannelOptions extends DeliveryOptions implements ResponseStatusMap
         if (json.containsKey("statuses"))
             this.statuses.putAll(json.getJsonObject("statuses").stream().collect(
                 toMap(Map.Entry::getKey, e -> HttpResponseStatus.parseLine(e.getValue().toString()))));
+        if (json.containsKey("echo"))
+            this.echo = json.getBoolean("echo");
     }
 
     public Delivery getDelivery()
@@ -88,6 +92,17 @@ public class ChannelOptions extends DeliveryOptions implements ResponseStatusMap
     public void setStatusForError(Class<? extends Throwable> errorClass, HttpResponseStatus status)
     {
         statuses.put(errorClass.getSimpleName(), status);
+    }
+
+    public boolean isEcho()
+    {
+        return echo;
+    }
+
+    public ChannelOptions setEcho(boolean echo)
+    {
+        this.echo = echo;
+        return this;
     }
 
     @Override public ChannelOptions setSendTimeout(long timeout)
@@ -130,6 +145,7 @@ public class ChannelOptions extends DeliveryOptions implements ResponseStatusMap
         if (!statuses.isEmpty())
             json.put("statuses", new JsonObject(statuses.entrySet().stream().collect(
                 toMap(Map.Entry::getKey, e -> e.getValue().toString()))));
+        json.put("echo", echo);
         return json;
     }
 }

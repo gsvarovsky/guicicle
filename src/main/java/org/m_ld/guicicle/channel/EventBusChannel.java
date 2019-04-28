@@ -5,20 +5,23 @@
 
 package org.m_ld.guicicle.channel;
 
-import com.google.common.reflect.Reflection;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Handler;
-import io.vertx.core.eventbus.EventBus;
-import io.vertx.core.eventbus.MessageConsumer;
-import io.vertx.core.eventbus.MessageProducer;
+import io.vertx.core.eventbus.*;
 import org.jetbrains.annotations.NotNull;
 import org.m_ld.guicicle.Handlers;
+import org.m_ld.guicicle.PartialFluentProxy;
+
+import java.util.Random;
 
 import static io.vertx.core.Future.succeededFuture;
+import static java.lang.String.format;
 
 public class EventBusChannel<T> extends AbstractChannel<T>
 {
+    private static final String ID_HEADER = "__channel.id";
     private final EventBus eventBus;
+    private final String channelId = format("%08x", new Random().nextInt());
     private final String address;
     private final ChannelOptions options;
     private final Handlers<AsyncResult<Object>> producedHandlers = new Handlers<>();
@@ -29,28 +32,56 @@ public class EventBusChannel<T> extends AbstractChannel<T>
         this.address = address;
         this.options = options;
 
-        if (options.getQuality() != ChannelOptions.Quality.AT_MOST_ONCE)
-            throw new IllegalArgumentException("EventBus does not support quality of service");
+        checkOptions(null, options);
     }
 
     @Override protected @NotNull MessageConsumer<T> createConsumer()
     {
-        return eventBus.consumer(address);
+        final MessageConsumer<T> consumer = eventBus.consumer(address);
+        //noinspection unchecked,unused
+        return PartialFluentProxy.create(MessageConsumer.class, consumer, new Object()
+        {
+            MessageConsumer<T> handler(Handler<Message<T>> handler)
+            {
+                return consumer.handler(msg -> filterEcho(msg, handler));
+            }
+        });
     }
 
     @Override protected @NotNull MessageProducer<T> createProducer()
     {
         final MessageProducer<T> producer = options.getDelivery() == ChannelOptions.Delivery.SEND ?
             eventBus.sender(address, options) : eventBus.publisher(address, options);
+        //noinspection unchecked,unused
+        return PartialFluentProxy.create(MessageProducer.class, producer, new Object()
+        {
+            MessageProducer<T> send(T message)
+            {
+                return produced(producer.send(message), message);
+            }
 
-        //noinspection UnstableApiUsage, unchecked
-        return Reflection.newProxy(MessageProducer.class, (proxy, method, args) -> {
-            final Object rtn = method.invoke(producer, args);
-            // The event bus is AT_MOST_ONCE, so immediately notify the handler
-            if ("send".equals(method.getName()) || "write".equals(method.getName()))
-                producedHandlers.handle(succeededFuture(args[0]));
-            // Maintain fluent chaining
-            return rtn instanceof MessageProducer ? proxy : rtn;
+            <R> MessageProducer<T> send(T message, Handler<AsyncResult<Message<R>>> replyHandler)
+            {
+                return produced(producer.send(message, replyHandler), message);
+            }
+
+            MessageProducer<T> write(T data)
+            {
+                return produced(producer.write(data), data);
+            }
+
+            MessageProducer<T> deliveryOptions(DeliveryOptions options)
+            {
+                checkOptions(EventBusChannel.this.options, options);
+                return producer.deliveryOptions(options);
+            }
+
+            private MessageProducer<T> produced(MessageProducer<T> producer, T message)
+            {
+                // The event bus is AT_MOST_ONCE, so immediately notify the handler
+                producedHandlers.handle(succeededFuture(message));
+                return producer;
+            }
         });
     }
 
@@ -67,11 +98,26 @@ public class EventBusChannel<T> extends AbstractChannel<T>
 
     @Override public <E> Channel<E> channel(String address, ChannelOptions options)
     {
-        return new EventBusChannel<>(eventBus, subAddress(address), options);
+        return new EventBusChannel<>(eventBus, this.address + '.' + address, options);
     }
 
-    private String subAddress(String address)
+    private void checkOptions(ChannelOptions oldOptions, DeliveryOptions options)
     {
-        return this.address + '.' + address;
+        if (options instanceof ChannelOptions)
+        {
+            final ChannelOptions newOptions = (ChannelOptions)options;
+            if (newOptions.getQuality() != ChannelOptions.Quality.AT_MOST_ONCE)
+                throw new IllegalArgumentException("EventBus does not support quality of service");
+            if (oldOptions != null && oldOptions.getDelivery() != newOptions.getDelivery())
+                throw new IllegalArgumentException("EventBus channel cannot change delivery option");
+            if (!newOptions.isEcho())
+                options.getHeaders().set(ID_HEADER, channelId);
+        }
+    }
+
+    private void filterEcho(Message<T> msg, Handler<Message<T>> handler)
+    {
+        if (options.isEcho() || !channelId.equals(msg.headers().get(ID_HEADER)))
+            handler.handle(msg);
     }
 }

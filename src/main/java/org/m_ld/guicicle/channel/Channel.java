@@ -19,12 +19,12 @@ import org.m_ld.guicicle.Vertice;
 public interface Channel<T> extends ChannelProvider
 {
     /**
-     * @return a channel consumer, for receiving messages from the channel.
+     * @return the channel consumer, for receiving messages from the channel.
      */
     MessageConsumer<T> consumer();
 
     /**
-     * @return a channel producer, for pushing messages to the channel.
+     * @return the channel producer, for pushing messages to the channel.
      */
     MessageProducer<T> producer();
 
