@@ -25,6 +25,22 @@ import static java.util.stream.Collectors.toMap;
 public class PartialFluentProxy
 {
     /**
+     * Utility class to extend for readable delegate classes.
+     *
+     * @param <T> the target class
+     */
+    @SuppressWarnings("unused")
+    public static class Delegate<T>
+    {
+        protected final T inner;
+
+        public Delegate(T inner)
+        {
+            this.inner = inner;
+        }
+    }
+
+    /**
      * Creates a factory function for proxies that implement the given target class and override methods in target
      * objects using the declared methods of the given delegate class.
      *
@@ -105,6 +121,9 @@ public class PartialFluentProxy
 
     private static Map<MethodKey, Method> methodMap(Method[] methods)
     {
-        return stream(methods).collect(toMap(m -> new MethodKey(m.getName(), m.getParameterTypes()), m -> m));
+        return stream(methods).collect(
+            toMap(m -> new MethodKey(m.getName(), m.getParameterTypes()), m -> m,
+                  // Choose the more specific return type, as per Class#getMethod
+                  (m1, m2) -> m2.getReturnType().isAssignableFrom(m1.getReturnType()) ? m1 : m2));
     }
 }

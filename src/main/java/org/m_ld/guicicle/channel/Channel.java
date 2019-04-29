@@ -97,4 +97,11 @@ public interface Channel<T> extends ChannelProvider
             request.fail(status.code(), status.reasonPhrase());
         }
     }
+
+    /**
+     * Closes the channel. This method should be called when the channel is not used anymore. This will unregister the
+     * channel consumer and end the producer. However it will <strong>not</strong> close any sub-channels created with
+     * {@link #channel(String, ChannelOptions)}.
+     */
+    void close();
 }

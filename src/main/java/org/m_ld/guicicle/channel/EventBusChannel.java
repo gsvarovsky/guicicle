@@ -41,7 +41,7 @@ public class EventBusChannel<T> extends AbstractChannel<T>
         //noinspection unchecked,unused
         return PartialFluentProxy.create(MessageConsumer.class, consumer, new Object()
         {
-            MessageConsumer<T> handler(Handler<Message<T>> handler)
+            public MessageConsumer<T> handler(Handler<Message<T>> handler)
             {
                 return consumer.handler(msg -> filterEcho(msg, handler));
             }
@@ -55,22 +55,22 @@ public class EventBusChannel<T> extends AbstractChannel<T>
         //noinspection unchecked,unused
         return PartialFluentProxy.create(MessageProducer.class, producer, new Object()
         {
-            MessageProducer<T> send(T message)
+            public MessageProducer<T> send(T message)
             {
                 return produced(producer.send(message), message);
             }
 
-            <R> MessageProducer<T> send(T message, Handler<AsyncResult<Message<R>>> replyHandler)
+            public <R> MessageProducer<T> send(T message, Handler<AsyncResult<Message<R>>> replyHandler)
             {
                 return produced(producer.send(message, replyHandler), message);
             }
 
-            MessageProducer<T> write(T data)
+            public MessageProducer<T> write(T data)
             {
                 return produced(producer.write(data), data);
             }
 
-            MessageProducer<T> deliveryOptions(DeliveryOptions options)
+            public MessageProducer<T> deliveryOptions(DeliveryOptions options)
             {
                 checkOptions(EventBusChannel.this.options, options);
                 return producer.deliveryOptions(options);

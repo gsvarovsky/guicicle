@@ -7,14 +7,12 @@ package org.m_ld.guicicle;
 
 import com.google.inject.Guice;
 import com.google.inject.Inject;
-import com.google.inject.Injector;
 import com.google.inject.Module;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.Context;
 import io.vertx.core.Future;
 import io.vertx.core.Vertx;
 import io.vertx.core.json.JsonArray;
-import io.vertx.core.shareddata.Shareable;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.Set;
@@ -30,26 +28,12 @@ public class Guicicle extends AbstractVerticle
 {
     @Inject private Set<Vertice> vertices;
 
-    private static class SharedInjector implements Shareable
-    {
-        final Injector injector;
-
-        SharedInjector(Module... modules)
-        {
-            this.injector = Guice.createInjector(modules);
-        }
-    }
-
-    @Override
-    public void init(Vertx vertx, Context context)
+    @Override public void init(Vertx vertx, Context context)
     {
         super.init(vertx, context);
-
         try
         {
-            vertx.sharedData().<String, SharedInjector>getLocalMap("guicicle")
-                .computeIfAbsent("injector", k -> createInjector(vertx))
-                .injector.injectMembers(this);
+            Guice.createInjector(modules()).injectMembers(this);
         }
         catch (RuntimeException e)
         {
@@ -59,10 +43,10 @@ public class Guicicle extends AbstractVerticle
         }
     }
 
-    @NotNull private Guicicle.SharedInjector createInjector(Vertx vertx)
+    @NotNull private Module[] modules()
     {
-        return new SharedInjector(
-            concat(Stream.of(new VertxCoreModule(vertx, config())), appModules()).toArray(Module[]::new));
+        return concat(Stream.of(new VertxCoreModule(vertx, context.deploymentID(), config())),
+                      appModules()).toArray(Module[]::new);
     }
 
     @NotNull private Stream<Module> appModules()

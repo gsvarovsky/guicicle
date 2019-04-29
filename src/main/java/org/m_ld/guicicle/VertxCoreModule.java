@@ -29,16 +29,19 @@ import static java.lang.reflect.Modifier.isFinal;
 public class VertxCoreModule extends AbstractModule
 {
     private final Vertx vertx;
+    private final String deploymentID;
     private final JsonObject config;
 
-    VertxCoreModule(Vertx vertx, JsonObject config)
+    VertxCoreModule(Vertx vertx, String deploymentID, JsonObject config)
     {
         this.vertx = vertx;
+        this.deploymentID = deploymentID;
         this.config = config;
     }
 
     @Override protected void configure()
     {
+        bind(String.class).annotatedWith(Names.named("vertx.deploymentID")).toInstance(deploymentID);
         bindJsonValue("config", config);
         newSetBinder(binder(), ChannelCodec.class);
         newSetBinder(binder(), Vertice.class);

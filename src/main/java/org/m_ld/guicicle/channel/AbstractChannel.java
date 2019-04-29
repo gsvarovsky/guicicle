@@ -28,6 +28,14 @@ public abstract class AbstractChannel<T> implements Channel<T>
         return producer;
     }
 
+    @Override public void close()
+    {
+        if (consumer != null)
+            consumer.unregister();
+        if (producer != null)
+            producer.close();
+    }
+
     protected abstract @NotNull MessageConsumer<T> createConsumer();
 
     protected abstract @NotNull MessageProducer<T> createProducer();
