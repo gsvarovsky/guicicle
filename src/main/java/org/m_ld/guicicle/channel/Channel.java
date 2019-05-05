@@ -87,9 +87,9 @@ public interface Channel<T> extends ChannelProvider
         if (response.succeeded())
         {
             if (ack == null)
-                request.reply(response.result());
+                request.reply(response.result(), options());
             else
-                request.reply(response.result(), ack);
+                request.reply(response.result(), options(), ack);
         }
         else
         {
