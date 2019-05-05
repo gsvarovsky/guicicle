@@ -3,19 +3,29 @@
  * Licensed under the MIT License. See LICENSE file in the project root for full license information.
  */
 
-package org.m_ld.guicicle;
+package org.m_ld.guicicle.test;
 
 import org.junit.Test;
+import org.m_ld.guicicle.PartialFluentProxy;
+import org.m_ld.guicicle.PartialFluentProxy.Delegate;
 
+import static java.lang.invoke.MethodHandles.lookup;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
 
+/**
+ * This class is in a different package to its test class, to verify object member access
+ */
 public class PartialFluentProxyTest
 {
-    interface Target
+    public interface Target
     {
         int delegated();
+
         String notDelegated();
+
         Target fluentDelegated(String value);
+
         Target fluentNotDelegated(String value);
     }
 
@@ -69,35 +79,35 @@ public class PartialFluentProxyTest
     @Test
     public void testNotDelegated()
     {
-        Target delegate = PartialFluentProxy.factory(Target.class, PartialDelegate.class, PartialDelegate::new)
+        Target proxy = PartialFluentProxy.factory(Target.class, lookup().in(PartialDelegate.class), PartialDelegate::new)
             .apply(new TargetImpl());
-        assertEquals("Hello", delegate.notDelegated());
+        assertEquals("Hello", proxy.notDelegated());
     }
 
     @Test
     public void testDelegated()
     {
-        Target delegate = PartialFluentProxy.factory(Target.class, PartialDelegate.class, PartialDelegate::new)
+        Target proxy = PartialFluentProxy.factory(Target.class, lookup().in(PartialDelegate.class), PartialDelegate::new)
             .apply(new TargetImpl());
-        assertEquals(2, delegate.delegated());
+        assertEquals(2, proxy.delegated());
     }
 
     @Test
     public void testFluentNotDelegated()
     {
-        Target delegate = PartialFluentProxy.factory(Target.class, PartialDelegate.class, PartialDelegate::new)
+        Target proxy = PartialFluentProxy.factory(Target.class, lookup().in(PartialDelegate.class), PartialDelegate::new)
             .apply(new TargetImpl());
-        assertEquals(2, delegate.fluentNotDelegated("Goodbye").delegated());
-        assertEquals("Goodbye", delegate.fluentNotDelegated("Goodbye").notDelegated());
+        assertEquals(2, proxy.fluentNotDelegated("Goodbye").delegated());
+        assertEquals("Goodbye", proxy.fluentNotDelegated("Goodbye").notDelegated());
     }
 
     @Test
     public void testFluentDelegated()
     {
-        Target delegate = PartialFluentProxy.factory(Target.class, PartialDelegate.class, PartialDelegate::new)
+        Target proxy = PartialFluentProxy.factory(Target.class, lookup().in(PartialDelegate.class), PartialDelegate::new)
             .apply(new TargetImpl());
-        assertEquals(2, delegate.fluentDelegated("Goodbye").delegated());
-        assertEquals("Override!", delegate.fluentDelegated("Goodbye").notDelegated());
+        assertEquals(2, proxy.fluentDelegated("Goodbye").delegated());
+        assertEquals("Override!", proxy.fluentDelegated("Goodbye").notDelegated());
     }
 
     @Test
@@ -105,19 +115,21 @@ public class PartialFluentProxyTest
     {
         final TargetImpl target = new TargetImpl();
         //noinspection unused
-        Target delegate = PartialFluentProxy.create(Target.class, target, new Object()
-        {
-            int delegated()
+        Target proxy = PartialFluentProxy.create(
+            Target.class, target, new Delegate<Target>(target, lookup())
             {
-                return 2;
-            }
+                int delegated()
+                {
+                    assertNotNull(proxy);
+                    return 2;
+                }
 
-            Target fluentDelegated(String value)
-            {
-                return target.fluentDelegated("Override!");
-            }
-        });
-        assertEquals(2, delegate.delegated());
-        assertEquals("Override!", delegate.fluentDelegated("Goodbye").notDelegated());
+                Target fluentDelegated(String value)
+                {
+                    return inner.fluentDelegated("Override!");
+                }
+            });
+        assertEquals(2, proxy.delegated());
+        assertEquals("Override!", proxy.fluentDelegated("Goodbye").notDelegated());
     }
 }

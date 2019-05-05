@@ -8,14 +8,18 @@ package org.m_ld.guicicle.channel;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Handler;
 import io.vertx.core.eventbus.*;
+import io.vertx.core.eventbus.impl.BodyReadStream;
+import io.vertx.core.streams.ReadStream;
 import org.jetbrains.annotations.NotNull;
 import org.m_ld.guicicle.Handlers;
 import org.m_ld.guicicle.PartialFluentProxy;
+import org.m_ld.guicicle.PartialFluentProxy.Delegate;
 
 import java.util.Random;
 
 import static io.vertx.core.Future.succeededFuture;
 import static java.lang.String.format;
+import static java.lang.invoke.MethodHandles.lookup;
 
 public class EventBusChannel<T> extends AbstractChannel<T>
 {
@@ -39,11 +43,16 @@ public class EventBusChannel<T> extends AbstractChannel<T>
     {
         final MessageConsumer<T> consumer = eventBus.consumer(address);
         //noinspection unchecked,unused
-        return PartialFluentProxy.create(MessageConsumer.class, consumer, new Object()
+        return PartialFluentProxy.create(MessageConsumer.class, consumer, new Delegate<MessageConsumer<T>>(consumer, lookup())
         {
-            public MessageConsumer<T> handler(Handler<Message<T>> handler)
+            MessageConsumer<T> handler(Handler<Message<T>> handler)
             {
                 return consumer.handler(msg -> filterEcho(msg, handler));
+            }
+
+            ReadStream<T> bodyStream()
+            {
+                return new BodyReadStream<>(proxy);
             }
         });
     }
@@ -53,24 +62,24 @@ public class EventBusChannel<T> extends AbstractChannel<T>
         final MessageProducer<T> producer = options.getDelivery() == ChannelOptions.Delivery.SEND ?
             eventBus.sender(address, options) : eventBus.publisher(address, options);
         //noinspection unchecked,unused
-        return PartialFluentProxy.create(MessageProducer.class, producer, new Object()
+        return PartialFluentProxy.create(MessageProducer.class, producer, new Delegate<MessageProducer>(producer, lookup())
         {
-            public MessageProducer<T> send(T message)
+            MessageProducer<T> send(T message)
             {
                 return produced(producer.send(message), message);
             }
 
-            public <R> MessageProducer<T> send(T message, Handler<AsyncResult<Message<R>>> replyHandler)
+            <R> MessageProducer<T> send(T message, Handler<AsyncResult<Message<R>>> replyHandler)
             {
                 return produced(producer.send(message, replyHandler), message);
             }
 
-            public MessageProducer<T> write(T data)
+            MessageProducer<T> write(T data)
             {
                 return produced(producer.write(data), data);
             }
 
-            public MessageProducer<T> deliveryOptions(DeliveryOptions options)
+            MessageProducer<T> deliveryOptions(DeliveryOptions options)
             {
                 checkOptions(EventBusChannel.this.options, options);
                 return producer.deliveryOptions(options);
@@ -111,8 +120,17 @@ public class EventBusChannel<T> extends AbstractChannel<T>
             if (oldOptions != null && oldOptions.getDelivery() != newOptions.getDelivery())
                 throw new IllegalArgumentException("EventBus channel cannot change delivery option");
             if (!newOptions.isEcho())
-                options.getHeaders().set(ID_HEADER, channelId);
+                setChannelIdHeader(options);
         }
+    }
+
+    private void setChannelIdHeader(DeliveryOptions options)
+    {
+        // Headers may not exist yet in DeliveryOptions
+        if (options.getHeaders() == null)
+            options.addHeader(ID_HEADER, channelId);
+        else
+            options.getHeaders().set(ID_HEADER, channelId);
     }
 
     private void filterEcho(Message<T> msg, Handler<Message<T>> handler)
