@@ -1,3 +1,4 @@
+[![Build Status](https://travis-ci.org/gsvarovsky/guicicle.svg?branch=master)](https://travis-ci.org/gsvarovsky/guicicle)
 ![stability-wip](https://img.shields.io/badge/stability-work_in_progress-lightgrey.svg)
 
 # guicicle
