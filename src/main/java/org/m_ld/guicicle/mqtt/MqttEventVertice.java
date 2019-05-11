@@ -5,22 +5,18 @@
 
 package org.m_ld.guicicle.mqtt;
 
+import com.google.common.collect.Sets;
 import com.google.inject.Inject;
-import com.google.inject.Injector;
-import com.google.inject.Key;
-import com.google.inject.TypeLiteral;
 import com.google.inject.name.Named;
-import com.google.inject.name.Names;
 import io.netty.handler.codec.mqtt.MqttQoS;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
+import io.vertx.core.MultiMap;
 import io.vertx.core.buffer.Buffer;
-import io.vertx.core.eventbus.DeliveryOptions;
-import io.vertx.core.eventbus.Message;
-import io.vertx.core.eventbus.MessageConsumer;
-import io.vertx.core.eventbus.MessageProducer;
+import io.vertx.core.eventbus.*;
 import io.vertx.core.eventbus.impl.BodyReadStream;
+import io.vertx.core.eventbus.impl.CodecManager;
 import io.vertx.core.streams.ReadStream;
 import io.vertx.mqtt.MqttClient;
 import io.vertx.mqtt.MqttClientOptions;
@@ -28,9 +24,16 @@ import io.vertx.mqtt.MqttException;
 import io.vertx.mqtt.messages.MqttPublishMessage;
 import io.vertx.mqtt.messages.MqttSubAckMessage;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 import org.m_ld.guicicle.Handlers;
 import org.m_ld.guicicle.Vertice;
-import org.m_ld.guicicle.channel.*;
+import org.m_ld.guicicle.channel.AbstractChannel;
+import org.m_ld.guicicle.channel.Channel;
+import org.m_ld.guicicle.channel.ChannelOptions;
+import org.m_ld.guicicle.channel.ChannelOptions.Delivery;
+import org.m_ld.guicicle.channel.ChannelProvider;
+import org.m_ld.guicicle.mqtt.MqttDirectAddress.MqttReplyAddress;
+import org.m_ld.guicicle.mqtt.MqttDirectAddress.MqttSendAddress;
 
 import java.util.*;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -39,39 +42,52 @@ import static io.vertx.core.Future.failedFuture;
 import static io.vertx.core.Future.succeededFuture;
 import static io.vertx.core.buffer.Buffer.buffer;
 import static java.lang.String.format;
+import static java.util.Arrays.asList;
+import static java.util.Collections.emptyList;
+import static java.util.Collections.singletonList;
 import static java.util.Objects.requireNonNull;
 import static org.m_ld.guicicle.Handlers.Flag.SINGLE_INSTANCE;
 import static org.m_ld.guicicle.Handlers.Flag.SINGLE_USE;
-import static org.m_ld.guicicle.mqtt.MqttUtil.isMatch;
+import static org.m_ld.guicicle.mqtt.MqttConsumer.subscription;
+import static org.m_ld.guicicle.mqtt.MqttDirectAddress.MqttReplyAddress.REPLY_ADDRESS;
+import static org.m_ld.guicicle.mqtt.MqttDirectAddress.MqttSendAddress.SEND_ADDRESS;
+import static org.m_ld.guicicle.mqtt.MqttTopicAddress.pattern;
+import static org.m_ld.guicicle.mqtt.VertxMqttModule.generateRandomId;
 
+/**
+ * TODO: Timeout
+ */
 public class MqttEventVertice implements ChannelProvider, Vertice
 {
-    private static final int MQTTASYNC_BAD_QOS = -9;
-    private static final int NO_PACKET = -1;
+    private static final int MQTTASYNC_BAD_QOS = -9, NO_PACKET = -1;
     private static final Map<ChannelOptions.Quality, MqttQoS> MQTT_QOS = new HashMap<>();
+
     static
     {
         MQTT_QOS.put(ChannelOptions.Quality.AT_MOST_ONCE, MqttQoS.AT_MOST_ONCE);
         MQTT_QOS.put(ChannelOptions.Quality.AT_LEAST_ONCE, MqttQoS.AT_LEAST_ONCE);
         MQTT_QOS.put(ChannelOptions.Quality.EXACTLY_ONCE, MqttQoS.EXACTLY_ONCE);
     }
+
     private int bufferSize = 128;
     private int port = MqttClientOptions.DEFAULT_PORT;
     private String host = MqttClientOptions.DEFAULT_HOST;
     private boolean connected = false;
     private final MqttClient mqtt;
-    private final Injector injector;
+    private final CodecManager codecManager;
+    private final List<MqttConsumer> consumers = new ArrayList<>();
+    private final List<MqttProducer> producers = new ArrayList<>();
+    // Mqtt exception handling is global. Best we can do is provide for multiple handlers.
+    private final Handlers<Throwable> exceptionHandlers = new Handlers<>();
+    private MqttPresence presence = null;
 
-    private final List<MqttChannel<?>.MqttConsumer> consumers = new ArrayList<>();
-    private final List<MqttChannel<?>.MqttProducer> producers = new ArrayList<>();
-
-    @Inject public MqttEventVertice(MqttClient mqtt, Injector injector)
+    @Inject public MqttEventVertice(MqttClient mqtt, CodecManager codecManager)
     {
         this.mqtt = mqtt;
-        this.injector = injector;
+        this.codecManager = codecManager;
     }
 
-    @Inject(optional = true) @Named("config.mqtt.buffer.size") public void setBufferSize(int bufferSize)
+    @Inject(optional = true) @Named("config.mqtt.bufferSize") public void setBufferSize(int bufferSize)
     {
         this.bufferSize = bufferSize;
     }
@@ -86,20 +102,29 @@ public class MqttEventVertice implements ChannelProvider, Vertice
         this.host = host;
     }
 
+    @Inject(optional = true) @Named("config.mqtt.hasPresence") public void setHasPresence(boolean hasPresence)
+    {
+        if (hasPresence && presence == null)
+            consumers.add(presence = new MqttPresence(mqtt));
+        else if (!hasPresence && presence != null)
+            throw new IllegalStateException("Cannot remove presence once requested");
+    }
+
     @Override public void start(Future<Void> startFuture)
     {
         mqtt.publishHandler(msg -> consumers.forEach(c -> c.onMessage(msg)))
             .subscribeCompletionHandler(msg -> consumers.forEach(c -> c.onSubscribeAck(msg)))
             .unsubscribeCompletionHandler(msg -> consumers.forEach(c -> c.onUnsubscribeAck(msg)))
             .publishCompletionHandler(msg -> producers.forEach(p -> p.onPublished(msg)))
+            .exceptionHandler(exceptionHandlers)
             .connect(port, host, connectResult -> {
                 if (connectResult.succeeded())
                 {
                     connected = true;
-                    // Register any pre-existing consumers which have a handler
-                    // TODO: The protocol allows doing these in a batch
-                    consumers.forEach(MqttChannel.MqttConsumer::register);
-                    producers.forEach(MqttChannel.MqttProducer::register);
+                    // Subscribe any pre-existing consumers
+                    subscribe(consumers);
+                    // Notify any pre-existing producers
+                    producers.forEach(MqttProducer::onConnected);
                 }
                 startFuture.handle(connectResult.mapEmpty());
             });
@@ -108,45 +133,111 @@ public class MqttEventVertice implements ChannelProvider, Vertice
     @Override public void stop(Future<Void> stopFuture)
     {
         mqtt.disconnect(result -> {
-            new ArrayList<>(consumers).forEach(MqttChannel.MqttConsumer::onEnd);
+            new ArrayList<>(consumers).forEach(MqttConsumer::close);
+            new ArrayList<>(producers).forEach(MqttProducer::close);
             stopFuture.handle(result.mapEmpty());
         });
     }
 
     @Override public <T> Channel<T> channel(String address, ChannelOptions options)
     {
-        if (options.getDelivery() == ChannelOptions.Delivery.SEND)
-            throw new UnsupportedOperationException("Cannot send with MQTT, yet");
+        if (options.getDelivery() == Delivery.SEND)
+            checkCanSend();
 
         return new MqttChannel<>(address, options);
     }
 
+    private void subscribe(List<MqttConsumer> consumers)
+    {
+        final Map<String, Integer> topics = new LinkedHashMap<>();
+        final Map<MqttConsumer, Integer> consumerQosIndex = new HashMap<>();
+        consumers.forEach(mqttConsumer -> {
+            consumerQosIndex.put(mqttConsumer, topics.size());
+            mqttConsumer.subscriptions().forEach(sub -> topics.put(sub.topic(), sub.qos().ordinal()));
+        });
+        mqtt.subscribe(topics, sent -> consumerQosIndex.forEach(
+            (mqttConsumer, qosIndex) -> mqttConsumer.onSubscribeSent(sent, qosIndex)));
+    }
+
+    private void checkCanSend()
+    {
+        if (presence == null)
+            throw new UnsupportedOperationException("Send with MQTT requires presence");
+    }
+
+    private MultiMap messageHeaders(MqttPublishMessage message, MultiMap fixedHeaders)
+    {
+        final MultiMap headers = MultiMap.caseInsensitiveMultiMap();
+        headers.addAll(fixedHeaders);
+        headers.add("mqtt.isDup", Boolean.toString(message.isDup()));
+        headers.add("mqtt.isRetain", Boolean.toString(message.isRetain()));
+        headers.add("mqtt.qosLevel", message.qosLevel().name());
+        headers.add("mqtt.messageId", Integer.toString(message.messageId()));
+        return headers;
+    }
+
+    private class WriteInFlight<T>
+    {
+        final T message;
+        // Only send messages have a message Id
+        final String messageId;
+        // Only sent messages have a reply handler
+        final Handler<AsyncResult<Message>> replyHandler;
+
+        WriteInFlight(T message, String messageId,
+                      @Nullable Handler<? extends AsyncResult<? extends Message>> replyHandler)
+        {
+            this.message = message;
+            this.messageId = messageId;
+            //noinspection unchecked
+            this.replyHandler = (Handler<AsyncResult<Message>>)replyHandler;
+        }
+
+        @Override public String toString()
+        {
+            return format("%s %s", messageId != null ? "Send" : "Publish", message);
+        }
+    }
+
     private class MqttChannel<T> extends AbstractChannel<T>
     {
-        final String topicName;
+        final String channelId = generateRandomId();
+        final MqttTopicAddress topicAddress;
+        final MqttChannelReplier replier;
         final Handlers<AsyncResult<Object>> producedHandlers = new Handlers<>();
         ChannelOptions options;
         MqttQoS qos;
-        ChannelCodec<T> codec;
 
         MqttChannel(String address, ChannelOptions options)
         {
-            this.topicName = requireNonNull(address);
+            this.topicAddress = pattern(requireNonNull(address));
             setOptions(options);
+            replier = new MqttChannelReplier();
+            consumers.add(replier);
+            producers.add(replier);
+            replier.addEndHandler(v -> {
+                consumers.remove(replier);
+                producers.remove(replier);
+            });
         }
 
-        void setOptions(ChannelOptions options)
+        void setOptions(DeliveryOptions options)
         {
-            this.options = options;
-            qos = MQTT_QOS.get(options.getQuality());
-            //noinspection unchecked
-            codec = injector.getInstance(
-                Key.get(new TypeLiteral<ChannelCodec>() {}, Names.named(options.getCodecName())));
+            if (options instanceof ChannelOptions)
+                this.options = new ChannelOptions((ChannelOptions)options);
+            else
+                this.options.setDeliveryOptions(options);
+            qos = MQTT_QOS.get(this.options.getQuality());
+        }
+
+        MessageCodec getCodec(Object message, @Nullable DeliveryOptions options)
+        {
+            return codecManager.lookupCodec(message, (options == null ? this.options : options).getCodecName());
         }
 
         @Override public <E> Channel<E> channel(String address, ChannelOptions options)
         {
-            return new MqttChannel<>(this.topicName + '/' + address, options);
+            return new MqttChannel<>(this.topicAddress + "/" + address, options);
         }
 
         @Override public Channel<T> producedHandler(Handler<AsyncResult<Object>> producedHandler)
@@ -162,74 +253,199 @@ public class MqttEventVertice implements ChannelProvider, Vertice
 
         @Override protected @NotNull MessageConsumer<T> createConsumer()
         {
-            return new MqttConsumer();
+            final MqttChannelConsumer consumer = new MqttChannelConsumer();
+            consumers.add(consumer);
+            consumer.addEndHandler(v -> consumers.remove(consumer));
+            return consumer;
         }
 
         @Override protected @NotNull MessageProducer<T> createProducer()
         {
-            return new MqttProducer();
+            final MqttChannelProducer producer = new MqttChannelProducer();
+            producers.add(producer);
+            producer.addEndHandler(v -> producers.remove(producer));
+            return producer;
         }
 
-        class MqttProducer implements MessageProducer<T>
+        class MqttChannelStream
         {
-            int writeQueueMaxSize = bufferSize;
-            final Map<Object, T> writesInFlight = new LinkedHashMap<>(bufferSize);
-            final Handlers<Void> drainHandlers = new Handlers<>(SINGLE_USE);
-            final Handlers<Throwable> exceptionHandler = new Handlers<>(SINGLE_INSTANCE);
+            Handler<Throwable> exceptionHandler;
+            final Handlers<Void> endHandlers = new Handlers<>(SINGLE_USE);
 
-            MqttProducer()
+            public String address()
             {
-                producers.add(this);
+                return topicAddress.toString();
             }
 
-            @Override public MessageProducer<T> send(T message)
+            void setExceptionHandler(Handler<Throwable> handler)
             {
-                throw new UnsupportedOperationException("Cannot send with MQTT, yet");
+                if (exceptionHandler != null)
+                    exceptionHandlers.remove(exceptionHandler);
+                exceptionHandlers.add(exceptionHandler = handler);
             }
 
-            @Override public <R> MessageProducer<T> send(T message,
-                                                         Handler<AsyncResult<Message<R>>> replyHandler)
+            void addEndHandler(Handler<Void> endHandler)
             {
-                throw new UnsupportedOperationException("Cannot send with MQTT, yet");
+                this.endHandlers.add(endHandler);
             }
 
-            @Override public MessageProducer<T> exceptionHandler(Handler<Throwable> handler)
+            public void close()
             {
-                mqtt.exceptionHandler(handler);
-                exceptionHandler.set(handler);
-                return this;
+                exceptionHandlers.remove(exceptionHandler);
+                endHandlers.handle(null);
             }
+        }
 
-            @Override public MessageProducer<T> write(T message)
+        abstract class MqttChannelWriter<M> extends MqttChannelStream implements MqttProducer
+        {
+            final Map<Object, WriteInFlight<M>> writesInFlight = new LinkedHashMap<>(bufferSize);
+            final MqttSendAddress sendAddress = SEND_ADDRESS.fromId(channelId).topic(address());
+            final Set<String> recentlySentTo = new HashSet<>();
+
+            void publish(WriteInFlight<M> wif, @Nullable DeliveryOptions options)
             {
-                if (connected)
+                final String address = wif.messageId == null ? address() : nextSendAddress(wif);
+                if (address != null)
                 {
                     final Buffer buffer = buffer();
-                    codec.encodeToWire(buffer, message);
+                    //noinspection unchecked
+                    getCodec(wif.message, options).encodeToWire(buffer, wif.message);
                     if (qos == MqttQoS.AT_MOST_ONCE)
                     {
-                        mqtt.publish(topicName, buffer, qos, false, false);
-                        producedHandlers.handle(succeededFuture(message));
+                        mqtt.publish(address, buffer, qos, false, false);
+                        onPublished(wif);
                     }
                     else
                     {
-                        mqtt.publish(topicName, buffer, qos, false, false, published -> {
+                        mqtt.publish(address, buffer, qos, false, false, published -> {
                             if (published.succeeded())
-                                writesInFlight.put(published.result(), message);
+                                writesInFlight.put(published.result(), wif);
                             else
                                 producedHandlers.handle(published.mapEmpty());
                         });
                     }
                 }
-                else
+                else if (qos != MqttQoS.AT_MOST_ONCE)
                 {
-                    // Relying on the quaranteed ordering of the LinkedHashMap
-                    writesInFlight.put(new Object(), message);
+                    producedHandlers.handle(failedFuture(format("No suitable address found for %s", wif)));
                 }
+            }
+
+            String nextSendAddress(WriteInFlight<M> wif)
+            {
+                checkCanSend();
+
+                final Set<String> present = presence.present(address());
+                if (recentlySentTo.containsAll(present))
+                    recentlySentTo.clear();
+
+                final Optional<MqttSendAddress> sendAddress =
+                    Sets.difference(present, recentlySentTo).stream().findAny().map(
+                        toId -> this.sendAddress.toId(toId).messageId(wif.messageId));
+
+                if (!sendAddress.isPresent() && wif.replyHandler != null)
+                    wif.replyHandler.handle(failedFuture(format("No-one present on %s to send message to", address())));
+
+                return sendAddress.map(MqttTopicAddress::toString).orElse(null);
+            }
+
+            @Override public void onPublished(Integer id)
+            {
+                final WriteInFlight<M> wif = writesInFlight.remove(id);
+                if (wif != null)
+                    onPublished(wif);
+            }
+
+            void onPublished(WriteInFlight<M> wif)
+            {
+                producedHandlers.handle(succeededFuture(wif.message));
+                if (wif.replyHandler != null)
+                    replier.repliesInFlight.put(wif.messageId, wif.replyHandler);
+            }
+        }
+
+        class MqttChannelReplier extends MqttChannelWriter<Object> implements MqttConsumer
+        {
+            final MqttReplyAddress consumeReplyAddress = REPLY_ADDRESS.toId(channelId);
+            final Map<String, Handler<AsyncResult<Message>>> repliesInFlight = new HashMap<>();
+
+            @Override public List<Subscription> subscriptions()
+            {
+                return singletonList(subscription(consumeReplyAddress.toString(), qos));
+            }
+
+            @Override public void onMessage(MqttPublishMessage message)
+            {
+                consumeReplyAddress.match(message.topicName()).ifPresent(address -> {
+                    // Received a reply to this channel, find a reply handler.
+                    final Handler<AsyncResult<Message>> replyHandler = repliesInFlight.remove(address.messageId());
+                    if (replyHandler != null)
+                    {
+                        final MultiMap headers = messageHeaders(message, options.getHeaders());
+                        // TODO: This will only work for replies using the named channel codec
+                        final Object payload = getCodec(null, null).decodeFromWire(0, message.payload());
+                        replyHandler.handle(succeededFuture(new MqttEventMessage<>(
+                            address(), headers, payload, replier.create(address))));
+                    }
+                });
+            }
+
+            @Override public void onSubscribeSent(AsyncResult<Integer> subscribeSendResult, int qosIndex)
+            {
+                if (subscribeSendResult.failed())
+                    exceptionHandlers.handle(subscribeSendResult.cause());
+            }
+
+            MqttEventMessage.Replier create(MqttDirectAddress address)
+            {
+                return new MqttEventMessage.Replier()
+                {
+                    final MqttReplyAddress replyAddress = REPLY_ADDRESS
+                        .fromId(channelId)
+                        .toId(address.fromId())
+                        .messageId(address.messageId());
+
+                    @Override public String address()
+                    {
+                        return replyAddress.toString();
+                    }
+
+                    @Override public <R> void reply(Object message, @Nullable DeliveryOptions options,
+                                                    @Nullable Handler<AsyncResult<Message<R>>> replyHandler)
+                    {
+                        publish(new WriteInFlight<>(message, replyAddress.messageId(), replyHandler), options);
+                    }
+                };
+            }
+        }
+
+        class MqttChannelProducer extends MqttChannelWriter<T> implements MessageProducer<T>
+        {
+            int writeQueueMaxSize = bufferSize;
+            final Handlers<Void> drainHandlers = new Handlers<>(SINGLE_USE);
+
+            @Override public MqttChannelProducer send(T message)
+            {
+                return write(message, true, null);
+            }
+
+            @Override public <R> MqttChannelProducer send(T message, Handler<AsyncResult<Message<R>>> replyHandler)
+            {
+                return write(message, true, replyHandler);
+            }
+
+            @Override public MqttChannelProducer exceptionHandler(Handler<Throwable> handler)
+            {
+                setExceptionHandler(handler);
                 return this;
             }
 
-            @Override public MessageProducer<T> setWriteQueueMaxSize(int maxSize)
+            @Override public MqttChannelProducer write(T message)
+            {
+                return write(message, options.getDelivery() == Delivery.SEND, null);
+            }
+
+            @Override public MqttChannelProducer setWriteQueueMaxSize(int maxSize)
             {
                 writeQueueMaxSize = maxSize;
                 return this;
@@ -240,24 +456,16 @@ public class MqttEventVertice implements ChannelProvider, Vertice
                 return writesInFlight.size() >= writeQueueMaxSize;
             }
 
-            @Override public MessageProducer<T> drainHandler(Handler<Void> handler)
+            @Override public MqttChannelProducer drainHandler(Handler<Void> handler)
             {
                 drainHandlers.add(handler);
                 return this;
             }
 
-            @Override public MessageProducer<T> deliveryOptions(DeliveryOptions options)
+            @Override public MqttChannelProducer deliveryOptions(DeliveryOptions options)
             {
-                if (options instanceof ChannelOptions)
-                    setOptions((ChannelOptions)options);
-                else
-                    MqttChannel.this.options.setDeliveryOptions(options);
+                setOptions(options);
                 return this;
-            }
-
-            @Override public String address()
-            {
-                return topicName;
             }
 
             @Override public void end()
@@ -265,87 +473,94 @@ public class MqttEventVertice implements ChannelProvider, Vertice
                 close();
             }
 
-            @Override public void close()
+            <R> MqttChannelProducer write(T message, boolean send, Handler<AsyncResult<Message<R>>> replyHandler)
             {
-                producers.remove(this);
+                write(new WriteInFlight<>(message, send ? generateRandomId() : null, replyHandler));
+                return this;
             }
 
-            void register()
+            void write(WriteInFlight<T> wif)
+            {
+                if (connected)
+                    publish(wif, options);
+                else
+                    // Relying on the guaranteed ordering of the LinkedHashMap
+                    writesInFlight.put(new Object(), wif);
+            }
+
+            @Override void onPublished(WriteInFlight<T> wif)
+            {
+                super.onPublished(wif);
+                if (writesInFlight.size() < writeQueueMaxSize / 2)
+                    drainHandlers.handle(null);
+            }
+
+            @Override public void onConnected()
             {
                 // Drain down the queue
-                final ArrayList<T> messages = new ArrayList<>(writesInFlight.values());
+                final ArrayList<WriteInFlight> messages = new ArrayList<>(writesInFlight.values());
                 writesInFlight.clear();
                 messages.forEach(this::write);
             }
-
-            void onPublished(Integer id)
-            {
-                final T message = writesInFlight.remove(id);
-                if (message != null)
-                {
-                    producedHandlers.handle(succeededFuture(message));
-                    if (writesInFlight.size() < writeQueueMaxSize/2)
-                        drainHandlers.handle(null);
-                }
-            }
         }
 
-        class MqttConsumer implements MessageConsumer<T>
+        class MqttChannelConsumer extends MqttChannelStream implements MqttConsumer, MessageConsumer<T>
         {
+            final MqttSendAddress sendAddress = SEND_ADDRESS.toId(channelId).topic(address());
             final Handlers<Message<T>> messageHandlers = new Handlers<>();
             final Handlers<AsyncResult<Void>> subscribeHandlers = new Handlers<>(SINGLE_USE);
             final Handlers<AsyncResult<Void>> unsubscribeHandler = new Handlers<>(SINGLE_INSTANCE, SINGLE_USE);
-            final Handlers<Void> endHandlers = new Handlers<>(SINGLE_USE);
-            int subscribeId = NO_PACKET, unsubscribeId = NO_PACKET;
-            int ordinal = 0;
+            int subscribeId = NO_PACKET, unsubscribeId = NO_PACKET, qosIndex = NO_PACKET;
             int maxBufferedMessages = bufferSize;
-            boolean registered = false;
-            Queue<MqttPublishMessage> pauseBuffer;
+            boolean subscribed = false;
+            Queue<MqttEventMessage<T>> pauseBuffer;
 
-            MqttConsumer()
+            MqttChannelConsumer()
             {
-                consumers.add(this);
+                subscribeHandlers.add(result -> {
+                    if (result.succeeded())
+                        subscribed = true;
+                });
             }
 
-            @Override public MessageConsumer<T> handler(Handler<Message<T>> handler)
+            @Override public MqttChannelConsumer handler(Handler<Message<T>> handler)
             {
-                // Subscribe to the given address if we're connected
-                if (connected && !registered)
-                    register();
-
                 this.messageHandlers.add(handler);
+                // Subscribe to the given address if we're connected
+                if (connected)
+                    subscribe(singletonList(this));
                 return this;
             }
 
-            @Override public MessageConsumer<T> exceptionHandler(Handler<Throwable> handler)
+            @Override public MqttChannelConsumer exceptionHandler(Handler<Throwable> handler)
             {
-                mqtt.exceptionHandler(handler);
+                setExceptionHandler(handler);
                 return this;
             }
 
-            @Override public MessageConsumer<T> pause()
+            @Override public MqttChannelConsumer pause()
             {
                 pauseBuffer = new ArrayBlockingQueue<>(maxBufferedMessages);
                 return this;
             }
 
-            @Override public MessageConsumer<T> resume()
+            @Override public MqttChannelConsumer resume()
             {
                 while (!pauseBuffer.isEmpty())
-                    handleMessage(pauseBuffer.remove());
+                    messageHandlers.handle(pauseBuffer.remove());
                 pauseBuffer = null;
                 return this;
             }
 
-            @Override public MessageConsumer<T> fetch(long amount)
+            @Override public MqttChannelConsumer fetch(long amount)
             {
                 // TODO: Handle back-pressure with our buffer, not just on pause
                 return this;
             }
 
-            @Override public MessageConsumer<T> endHandler(Handler<Void> endHandler)
+            @Override public MqttChannelConsumer endHandler(Handler<Void> endHandler)
             {
-                this.endHandlers.add(endHandler);
+                addEndHandler(endHandler);
                 return this;
             }
 
@@ -356,15 +571,10 @@ public class MqttEventVertice implements ChannelProvider, Vertice
 
             @Override public boolean isRegistered()
             {
-                return registered;
+                return subscribed;
             }
 
-            @Override public String address()
-            {
-                return topicName;
-            }
-
-            @Override public MessageConsumer<T> setMaxBufferedMessages(int maxBufferedMessages)
+            @Override public MqttChannelConsumer setMaxBufferedMessages(int maxBufferedMessages)
             {
                 this.maxBufferedMessages = maxBufferedMessages;
                 return this;
@@ -382,13 +592,13 @@ public class MqttEventVertice implements ChannelProvider, Vertice
 
             @Override public void unregister()
             {
-                mqtt.unsubscribe(topicName);
+                mqtt.unsubscribe(address());
             }
 
             @Override public void unregister(Handler<AsyncResult<Void>> completionHandler)
             {
                 unsubscribeHandler.set(completionHandler);
-                mqtt.unsubscribe(topicName, unsubscribeSendResult -> {
+                mqtt.unsubscribe(address(), unsubscribeSendResult -> {
                     if (unsubscribeSendResult.succeeded())
                         unsubscribeId = unsubscribeSendResult.result();
                     else
@@ -396,43 +606,69 @@ public class MqttEventVertice implements ChannelProvider, Vertice
                 });
             }
 
-            void register()
+            @Override public List<Subscription> subscriptions()
             {
-                mqtt.subscribe(topicName, qos.ordinal(), subscribeSendResult -> {
-                    if (subscribeSendResult.succeeded())
-                        subscribeId = subscribeSendResult.result();
-                    else
-                        subscribeHandlers.handle(failedFuture(subscribeSendResult.cause()));
-                });
-            }
-
-            void onMessage(MqttPublishMessage message)
-            {
-                if (isMatch(message.topicName(), topicName))
+                if (!messageHandlers.isEmpty())
                 {
-                    if (pauseBuffer == null)
-                        handleMessage(message);
+                    if (presence == null)
+                        return singletonList(subscription(address(), qos));
                     else
-                        pauseBuffer.add(message);
+                        return asList(subscription(address(), qos), subscription(sendAddress.toString(), qos));
+                }
+                else
+                {
+                    return emptyList();
                 }
             }
 
-            void handleMessage(MqttPublishMessage message)
+            @Override public void onSubscribeSent(AsyncResult<Integer> subscribeSendResult, int qosIndex)
             {
-                messageHandlers.handle(new MqttEventMessage<>(message, options.getHeaders(), codec));
+                if (subscribeSendResult.succeeded())
+                {
+                    this.qosIndex = qosIndex;
+                    this.subscribeId = subscribeSendResult.result();
+                }
+                else
+                {
+                    subscribeHandlers.handle(failedFuture(subscribeSendResult.cause()));
+                }
             }
 
-            void onSubscribeAck(MqttSubAckMessage subAckMessage)
+            @Override public void onMessage(MqttPublishMessage message)
+            {
+                Optional<MqttSendAddress> sent = Optional.empty();
+                if (topicAddress.match(message.topicName()).isPresent() ||
+                    (sent = sendAddress.match(message.topicName())).isPresent())
+                {
+                    final MultiMap headers = messageHeaders(message, options.getHeaders());
+                    //noinspection unchecked TODO: will not work for system codecs
+                    final T payload = (T)getCodec(null, options).decodeFromWire(0, message.payload());
+                    final MqttEventMessage<T> eventMessage = sent
+                        .map(sentAddress -> new MqttEventMessage<>(
+                            address(), headers, payload, replier.create(sentAddress)))
+                        .orElseGet(() -> new MqttEventMessage<>(address(), headers, payload));
+
+                    if (pauseBuffer == null)
+                        messageHandlers.handle(eventMessage);
+                    else
+                        pauseBuffer.add(eventMessage);
+                }
+            }
+
+            @Override public void onSubscribeAck(MqttSubAckMessage subAckMessage)
             {
                 if (subscribeId == subAckMessage.messageId())
                 {
                     try
                     {
-                        final int qosValue = subAckMessage.grantedQoSLevels().get(ordinal);
-                        final MqttQoS qosReceived = MqttQoS.valueOf(qosValue);
+                        final MqttQoS qosReceived =
+                            MqttQoS.valueOf(subAckMessage.grantedQoSLevels().get(qosIndex));
                         if (qosReceived != qos)
                             throw new IllegalStateException(
                                 format("Mismatched QoS: expecting %s, received %s", qos, qosReceived));
+                        if (presence != null) // Announce our presence
+                            presence.join(channelId, address());
+
                         subscribeHandlers.handle(succeededFuture());
                     }
                     catch (Exception e)
@@ -444,19 +680,20 @@ public class MqttEventVertice implements ChannelProvider, Vertice
                 }
             }
 
-            void onUnsubscribeAck(int messageId)
+            @Override public void onUnsubscribeAck(int messageId)
             {
                 if (unsubscribeId == messageId)
                 {
                     unsubscribeHandler.handle(succeededFuture());
-                    onEnd();
+                    close();
                 }
             }
 
-            void onEnd()
+            @Override public void close()
             {
-                endHandlers.handle(null);
-                consumers.remove(this);
+                super.close();
+                if (presence != null)
+                    presence.leave(channelId);
             }
         }
     }

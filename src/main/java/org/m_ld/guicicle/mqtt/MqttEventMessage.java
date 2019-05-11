@@ -10,31 +10,44 @@ import io.vertx.core.Handler;
 import io.vertx.core.MultiMap;
 import io.vertx.core.eventbus.DeliveryOptions;
 import io.vertx.core.eventbus.Message;
-import io.vertx.core.eventbus.MessageCodec;
-import io.vertx.mqtt.messages.MqttPublishMessage;
+import io.vertx.core.eventbus.ReplyException;
+import org.jetbrains.annotations.Nullable;
 import org.m_ld.guicicle.channel.Channel;
+
+import static io.vertx.core.eventbus.ReplyFailure.RECIPIENT_FAILURE;
 
 class MqttEventMessage<T> implements Message<T>
 {
-    private final MqttPublishMessage message;
+    interface Replier
+    {
+        String address();
+
+        <R> void reply(Object message,
+                       @Nullable DeliveryOptions options,
+                       @Nullable Handler<AsyncResult<Message<R>>> replyHandler);
+    }
+
+    private final String address;
     private final MultiMap headers;
     private final T payload;
+    private final Replier replier;
 
-    public MqttEventMessage(MqttPublishMessage message, MultiMap headers, MessageCodec<?, T> codec)
+    MqttEventMessage(String address, MultiMap headers, T payload)
     {
-        this.message = message;
-        this.headers = MultiMap.caseInsensitiveMultiMap();
-        this.headers.addAll(headers);
-        this.headers.add("mqtt.isDup", Boolean.toString(message.isDup()));
-        this.headers.add("mqtt.isRetain", Boolean.toString(message.isRetain()));
-        this.headers.add("mqtt.qosLevel", message.qosLevel().name());
-        this.headers.add("mqtt.messageId", Integer.toString(message.messageId()));
-        this.payload = codec.decodeFromWire(0, message.payload());
+        this(address, headers, payload, null);
+    }
+
+    MqttEventMessage(String address, MultiMap headers, T payload, @Nullable Replier replier)
+    {
+        this.address = address;
+        this.headers = headers;
+        this.payload = payload;
+        this.replier = replier;
     }
 
     @Override public String address()
     {
-        return message.topicName();
+        return address;
     }
 
     @Override public MultiMap headers()
@@ -49,12 +62,12 @@ class MqttEventMessage<T> implements Message<T>
 
     @Override public String replyAddress()
     {
-        throw new UnsupportedOperationException("Cannot reply with MQTT, yet");
+        return replier != null ? replier.address() : null;
     }
 
     @Override public boolean isSend()
     {
-        return false; // MQTT is pub-sub
+        return replier != null;
     }
 
     /**
@@ -65,27 +78,33 @@ class MqttEventMessage<T> implements Message<T>
      */
     @Override public void reply(Object message)
     {
-        throw new UnsupportedOperationException("Cannot reply with MQTT, yet");
+        if (replier != null)
+            replier.reply(message, null, null);
     }
 
     @Override public <R> void reply(Object message, Handler<AsyncResult<Message<R>>> replyHandler)
     {
-        throw new UnsupportedOperationException("Cannot reply with MQTT, yet");
+        if (replier != null)
+            replier.reply(message, null, replyHandler);
     }
 
     @Override public void reply(Object message, DeliveryOptions options)
     {
-        throw new UnsupportedOperationException("Cannot reply with MQTT, yet");
+        if (replier != null)
+            replier.reply(message, options, null);
     }
 
-    @Override public <R> void reply(Object message, DeliveryOptions options,
+    @Override public <R> void reply(Object message,
+                                    DeliveryOptions options,
                                     Handler<AsyncResult<Message<R>>> replyHandler)
     {
-        throw new UnsupportedOperationException("Cannot reply with MQTT, yet");
+        if (replier != null)
+            replier.reply(message, options, replyHandler);
     }
 
     @Override public void fail(int failureCode, String message)
     {
-        throw new UnsupportedOperationException("Cannot reply with MQTT, yet");
+        if (replier != null)
+            reply(new ReplyException(RECIPIENT_FAILURE, failureCode, message));
     }
 }
