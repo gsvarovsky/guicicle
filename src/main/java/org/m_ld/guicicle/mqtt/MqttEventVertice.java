@@ -167,10 +167,11 @@ public class MqttEventVertice implements ChannelProvider, Vertice
             throw new UnsupportedOperationException("Send with MQTT requires presence");
     }
 
-    private MultiMap messageHeaders(MqttPublishMessage message, MultiMap fixedHeaders)
+    private MultiMap messageHeaders(MqttPublishMessage message, @Nullable MultiMap fixedHeaders)
     {
         final MultiMap headers = MultiMap.caseInsensitiveMultiMap();
-        headers.addAll(fixedHeaders);
+        if (fixedHeaders != null)
+            headers.addAll(fixedHeaders);
         headers.add("mqtt.isDup", Boolean.toString(message.isDup()));
         headers.add("mqtt.isRetain", Boolean.toString(message.isRetain()));
         headers.add("mqtt.qosLevel", message.qosLevel().name());
@@ -635,7 +636,7 @@ public class MqttEventVertice implements ChannelProvider, Vertice
                     (sent = sendAddress.match(message.topicName())).isPresent())
                 {
                     final MultiMap headers = messageHeaders(message, options.getHeaders());
-                    //noinspection unchecked TODO: will not work for system codecs
+                    //noinspection unchecked
                     final T payload = (T)eventCodec.decodeFromWire(message.payload());
                     final MqttEventMessage<T> eventMessage = sent
                         .map(sentAddress -> new MqttEventMessage<>(

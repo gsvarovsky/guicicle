@@ -14,6 +14,14 @@ import io.vertx.core.eventbus.impl.CodecManager;
 import static io.netty.util.CharsetUtil.UTF_8;
 import static io.vertx.core.buffer.Buffer.buffer;
 
+/**
+ * Not strictly a {@link MessageCodec}, but similarly used to encode and decode MQTT events as published by the {@link
+ * MqttEventVertice}.
+ * <p>
+ * The full encoding includes the payload encoding codec identity for decoding at the consumer. This is the system codec
+ * ID (-1 for a non-system codec) and the codec name. The available codecs at the consumer must tally with those at the
+ * producer, or have a suitable translation.
+ */
 public class MqttEventCodec
 {
     private final CodecManager codecManager;

@@ -13,6 +13,7 @@ import io.moquette.broker.config.IResourceLoader;
 import io.moquette.broker.config.ResourceLoaderConfig;
 import io.moquette.interception.AbstractInterceptHandler;
 import io.moquette.interception.messages.InterceptPublishMessage;
+import io.netty.handler.codec.mqtt.MqttQoS;
 import io.vertx.core.DeploymentOptions;
 import io.vertx.core.Future;
 import io.vertx.core.eventbus.EventBus;
@@ -30,6 +31,7 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.m_ld.guicicle.Guicicle;
 import org.m_ld.guicicle.Vertice;
+import org.m_ld.guicicle.channel.Channel;
 import org.m_ld.guicicle.channel.ChannelOptions;
 import org.m_ld.guicicle.channel.ChannelProvider;
 import org.m_ld.guicicle.channel.ChannelProvider.Central;
@@ -40,9 +42,10 @@ import java.util.function.Consumer;
 
 import static java.util.Collections.singletonList;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 
 @RunWith(VertxUnitRunner.class)
-public class VertxMqttTest
+public class VertxMqttPublishTest
 {
     @ClassRule public static RunTestOnContext rule = new RunTestOnContext();
     private static Server mqttBroker;
@@ -99,7 +102,7 @@ public class VertxMqttTest
         final DeploymentOptions options = new DeploymentOptions().setConfig(
             new JsonObject()
                 .put("guice.module", TestModule.class.getName())
-                .put("mqtt", new JsonObject())); // All default options
+                .put("mqtt", new JsonObject())); // All default options (no presence)
 
         rule.vertx().deployVerticle(Guicicle.class, options, s -> deployed.complete());
     }
@@ -108,11 +111,44 @@ public class VertxMqttTest
     {
         final Async done = context.async();
         TestModule.run(channels -> {
+            channels.channel("test", new ChannelOptions()).producer().write("Hello");
             published.get().setHandler(context.asyncAssertSuccess(msg -> {
                 assertEquals("Hello", EVENT_CODEC.decodeFromWire(msg.payload()));
+                assertEquals(MqttQoS.AT_MOST_ONCE, msg.qosLevel());
+                assertEquals("test", msg.topicName());
                 done.complete();
             }));
-            channels.channel("test", new ChannelOptions()).producer().write("Hello");
+        });
+    }
+
+    @Test public void testNoSendBecauseNoPresence(TestContext context)
+    {
+        final Async done = context.async();
+        TestModule.run(channels -> {
+            try
+            {
+                channels.channel("test", new ChannelOptions()).producer().send("Hello");
+                context.fail();
+            }
+            catch (UnsupportedOperationException e)
+            {
+                done.complete();
+            }
+        });
+    }
+
+    @Test public void testEchoString(TestContext context)
+    {
+        final Async done = context.async();
+        TestModule.run(channels -> {
+            final Channel<String> channel = channels.channel("test", new ChannelOptions().setEcho(true));
+            channel.consumer().handler(msg -> {
+                assertEquals("Hello", msg.body());
+                assertEquals("test", msg.address());
+                assertFalse(msg.isSend());
+                done.complete();
+            }).completionHandler(context.asyncAssertSuccess(
+                v -> channel.producer().write("Hello")));
         });
     }
 
