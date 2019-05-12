@@ -14,9 +14,11 @@ import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.MultiMap;
 import io.vertx.core.buffer.Buffer;
-import io.vertx.core.eventbus.*;
+import io.vertx.core.eventbus.DeliveryOptions;
+import io.vertx.core.eventbus.Message;
+import io.vertx.core.eventbus.MessageConsumer;
+import io.vertx.core.eventbus.MessageProducer;
 import io.vertx.core.eventbus.impl.BodyReadStream;
-import io.vertx.core.eventbus.impl.CodecManager;
 import io.vertx.core.streams.ReadStream;
 import io.vertx.mqtt.MqttClient;
 import io.vertx.mqtt.MqttClientOptions;
@@ -40,7 +42,6 @@ import java.util.concurrent.ArrayBlockingQueue;
 
 import static io.vertx.core.Future.failedFuture;
 import static io.vertx.core.Future.succeededFuture;
-import static io.vertx.core.buffer.Buffer.buffer;
 import static java.lang.String.format;
 import static java.util.Arrays.asList;
 import static java.util.Collections.emptyList;
@@ -74,17 +75,17 @@ public class MqttEventVertice implements ChannelProvider, Vertice
     private String host = MqttClientOptions.DEFAULT_HOST;
     private boolean connected = false;
     private final MqttClient mqtt;
-    private final CodecManager codecManager;
+    private final MqttEventCodec eventCodec;
     private final List<MqttConsumer> consumers = new ArrayList<>();
     private final List<MqttProducer> producers = new ArrayList<>();
     // Mqtt exception handling is global. Best we can do is provide for multiple handlers.
     private final Handlers<Throwable> exceptionHandlers = new Handlers<>();
     private MqttPresence presence = null;
 
-    @Inject public MqttEventVertice(MqttClient mqtt, CodecManager codecManager)
+    @Inject public MqttEventVertice(MqttClient mqtt, MqttEventCodec eventCodec)
     {
         this.mqtt = mqtt;
-        this.codecManager = codecManager;
+        this.eventCodec = eventCodec;
     }
 
     @Inject(optional = true) public void setBufferSize(@Named("config.mqtt.bufferSize") int bufferSize)
@@ -231,11 +232,6 @@ public class MqttEventVertice implements ChannelProvider, Vertice
             qos = MQTT_QOS.get(this.options.getQuality());
         }
 
-        MessageCodec getCodec(Object message, @Nullable DeliveryOptions options)
-        {
-            return codecManager.lookupCodec(message, (options == null ? this.options : options).getCodecName());
-        }
-
         @Override public <E> Channel<E> channel(String address, ChannelOptions options)
         {
             return new MqttChannel<>(this.topicAddress + "/" + address, options);
@@ -308,9 +304,8 @@ public class MqttEventVertice implements ChannelProvider, Vertice
                 final String address = wif.messageId == null ? address() : nextSendAddress(wif);
                 if (address != null)
                 {
-                    final Buffer buffer = buffer();
-                    //noinspection unchecked
-                    getCodec(wif.message, options).encodeToWire(buffer, wif.message);
+                    final Buffer buffer = eventCodec.encodeToWire(
+                        wif.message, options == null ? MqttChannel.this.options : options);
                     if (qos == MqttQoS.AT_MOST_ONCE)
                     {
                         mqtt.publish(address, buffer, qos, false, false);
@@ -383,10 +378,8 @@ public class MqttEventVertice implements ChannelProvider, Vertice
                     if (replyHandler != null)
                     {
                         final MultiMap headers = messageHeaders(message, options.getHeaders());
-                        // TODO: This will only work for replies using the named channel codec
-                        final Object payload = getCodec(null, null).decodeFromWire(0, message.payload());
                         replyHandler.handle(succeededFuture(new MqttEventMessage<>(
-                            address(), headers, payload, replier.create(address))));
+                            address(), headers, eventCodec.decodeFromWire(message.payload()), replier.create(address))));
                     }
                 });
             }
@@ -643,7 +636,7 @@ public class MqttEventVertice implements ChannelProvider, Vertice
                 {
                     final MultiMap headers = messageHeaders(message, options.getHeaders());
                     //noinspection unchecked TODO: will not work for system codecs
-                    final T payload = (T)getCodec(null, options).decodeFromWire(0, message.payload());
+                    final T payload = (T)eventCodec.decodeFromWire(message.payload());
                     final MqttEventMessage<T> eventMessage = sent
                         .map(sentAddress -> new MqttEventMessage<>(
                             address(), headers, payload, replier.create(sentAddress)))

@@ -16,6 +16,7 @@ import io.moquette.interception.messages.InterceptPublishMessage;
 import io.vertx.core.DeploymentOptions;
 import io.vertx.core.Future;
 import io.vertx.core.eventbus.EventBus;
+import io.vertx.core.eventbus.impl.CodecManager;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.unit.Async;
 import io.vertx.ext.unit.TestContext;
@@ -29,6 +30,7 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.m_ld.guicicle.Guicicle;
 import org.m_ld.guicicle.Vertice;
+import org.m_ld.guicicle.channel.ChannelOptions;
 import org.m_ld.guicicle.channel.ChannelProvider;
 import org.m_ld.guicicle.channel.ChannelProvider.Central;
 
@@ -37,7 +39,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 import static java.util.Collections.singletonList;
-import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertEquals;
 
 @RunWith(VertxUnitRunner.class)
 public class VertxMqttTest
@@ -45,6 +47,7 @@ public class VertxMqttTest
     @ClassRule public static RunTestOnContext rule = new RunTestOnContext();
     private static Server mqttBroker;
     private static final AtomicReference<Future<MqttPublishMessage>> published = new AtomicReference<>();
+    private static final MqttEventCodec EVENT_CODEC = new MqttEventCodec(new CodecManager());
 
     public static class TestModule extends VertxMqttModule
     {
@@ -63,6 +66,7 @@ public class VertxMqttTest
 
         static void run(Consumer<ChannelProvider> theTest)
         {
+            published.set(Future.future());
             test.set(theTest);
             rule.vertx().eventBus().publish("run.test", null);
         }
@@ -86,7 +90,8 @@ public class VertxMqttTest
             public void onPublish(InterceptPublishMessage msg)
             {
                 published.get().complete(MqttPublishMessage.create(
-                    -1, msg.getQos(), msg.isDupFlag(), msg.isRetainFlag(), msg.getTopicName(), msg.getPayload()));
+                    -1, msg.getQos(), msg.isDupFlag(), msg.isRetainFlag(),
+                    msg.getTopicName(), msg.getPayload().copy()));
             }
         }));
 
@@ -99,12 +104,15 @@ public class VertxMqttTest
         rule.vertx().deployVerticle(Guicicle.class, options, s -> deployed.complete());
     }
 
-    @Test public void testTestSetup(TestContext context)
+    @Test public void testPublishString(TestContext context)
     {
         final Async done = context.async();
         TestModule.run(channels -> {
-            assertNotNull(channels);
-            done.complete();
+            published.get().setHandler(context.asyncAssertSuccess(msg -> {
+                assertEquals("Hello", EVENT_CODEC.decodeFromWire(msg.payload()));
+                done.complete();
+            }));
+            channels.channel("test", new ChannelOptions()).producer().write("Hello");
         });
     }
 
