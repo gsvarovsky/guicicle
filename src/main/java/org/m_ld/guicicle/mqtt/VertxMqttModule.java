@@ -45,7 +45,8 @@ public class VertxMqttModule extends AbstractModule
         {
             final String clientId = generateRandomId();
             options.setClientId(clientId);
-            options.setWillTopic(options.getWillTopic().replace("{clientId}", clientId));
+            if (options.getWillTopic() != null)
+                options.setWillTopic(options.getWillTopic().replace("{clientId}", clientId));
         }
         return options;
     }

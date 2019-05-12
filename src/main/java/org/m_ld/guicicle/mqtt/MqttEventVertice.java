@@ -87,22 +87,22 @@ public class MqttEventVertice implements ChannelProvider, Vertice
         this.codecManager = codecManager;
     }
 
-    @Inject(optional = true) @Named("config.mqtt.bufferSize") public void setBufferSize(int bufferSize)
+    @Inject(optional = true) public void setBufferSize(@Named("config.mqtt.bufferSize") int bufferSize)
     {
         this.bufferSize = bufferSize;
     }
 
-    @Inject(optional = true) @Named("config.mqtt.port") public void setPort(int port)
+    @Inject(optional = true) public void setPort(@Named("config.mqtt.port") int port)
     {
         this.port = port;
     }
 
-    @Inject(optional = true) @Named("config.mqtt.host") public void setHost(String host)
+    @Inject(optional = true) public void setHost(@Named("config.mqtt.host") String host)
     {
         this.host = host;
     }
 
-    @Inject(optional = true) @Named("config.mqtt.hasPresence") public void setHasPresence(boolean hasPresence)
+    @Inject(optional = true) public void setHasPresence(@Named("config.mqtt.hasPresence") boolean hasPresence)
     {
         if (hasPresence && presence == null)
             consumers.add(presence = new MqttPresence(mqtt));
@@ -155,8 +155,9 @@ public class MqttEventVertice implements ChannelProvider, Vertice
             consumerQosIndex.put(mqttConsumer, topics.size());
             mqttConsumer.subscriptions().forEach(sub -> topics.put(sub.topic(), sub.qos().ordinal()));
         });
-        mqtt.subscribe(topics, sent -> consumerQosIndex.forEach(
-            (mqttConsumer, qosIndex) -> mqttConsumer.onSubscribeSent(sent, qosIndex)));
+        if (!topics.isEmpty())
+            mqtt.subscribe(topics, sent -> consumerQosIndex.forEach(
+                (mqttConsumer, qosIndex) -> mqttConsumer.onSubscribeSent(sent, qosIndex)));
     }
 
     private void checkCanSend()
