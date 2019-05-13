@@ -34,6 +34,7 @@ import java.util.UUID;
 
 import static io.vertx.core.Future.future;
 import static io.vertx.core.Future.succeededFuture;
+import static io.vertx.core.MultiMap.caseInsensitiveMultiMap;
 import static org.junit.Assert.*;
 import static org.m_ld.guicicle.channel.ChannelOptions.Quality.AT_LEAST_ONCE;
 import static org.m_ld.guicicle.channel.ChannelOptions.Quality.AT_MOST_ONCE;
@@ -118,7 +119,7 @@ public class MqttEventVerticeTest
         final UUID value = UUID.randomUUID();
         channel.producer().write(value);
         verify(mqtt).publish(eq("channel"), bufferCaptor.capture(), eq(MqttQoS.AT_MOST_ONCE), eq(false), eq(false));
-        assertEquals(eventCodec.decodeFromWire(bufferCaptor.getValue()), value);
+        assertEquals(eventCodec.decodeFromWire(bufferCaptor.getValue(), caseInsensitiveMultiMap()), value);
     }
 
     @Test public void testWriteEventPreStart()
@@ -130,7 +131,7 @@ public class MqttEventVerticeTest
         channel.producer().write(value);
         mqttEvents.start(future());
         verify(mqtt).publish(eq("channel"), bufferCaptor.capture(), eq(MqttQoS.AT_MOST_ONCE), eq(false), eq(false));
-        assertEquals(eventCodec.decodeFromWire(bufferCaptor.getValue()), value);
+        assertEquals(eventCodec.decodeFromWire(bufferCaptor.getValue(), caseInsensitiveMultiMap()), value);
     }
 
     @Test public void testWriteEventAtLeastOnce()
@@ -146,7 +147,7 @@ public class MqttEventVerticeTest
         producer.setWriteQueueMaxSize(1).write(value);
         verify(mqtt).publish(eq("channel"), bufferCaptor.capture(), eq(MqttQoS.AT_LEAST_ONCE),
                              eq(false), eq(false), publishSentCaptor.capture());
-        assertEquals(eventCodec.decodeFromWire(bufferCaptor.getValue()), value);
+        assertEquals(eventCodec.decodeFromWire(bufferCaptor.getValue(), caseInsensitiveMultiMap()), value);
         publishSentCaptor.getValue().handle(succeededFuture(1));
         assertFalse(sentMessages.contains(value));
         assertTrue(producer.writeQueueFull());

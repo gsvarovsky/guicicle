@@ -15,26 +15,21 @@ import org.m_ld.guicicle.Handlers;
 import org.m_ld.guicicle.PartialFluentProxy;
 import org.m_ld.guicicle.PartialFluentProxy.Delegate;
 
-import java.util.Random;
-
 import static io.vertx.core.Future.succeededFuture;
-import static java.lang.String.format;
 import static java.lang.invoke.MethodHandles.lookup;
 
 public class EventBusChannel<T> extends AbstractChannel<T>
 {
-    private static final String ID_HEADER = "__channel.id";
     private final EventBus eventBus;
-    private final String channelId = format("%08x", new Random().nextInt());
     private final String address;
-    private final ChannelOptions options;
     private final Handlers<AsyncResult<Object>> producedHandlers = new Handlers<>();
 
     public EventBusChannel(EventBus eventBus, String address, ChannelOptions options)
     {
+        super(options);
+
         this.eventBus = eventBus;
         this.address = address;
-        this.options = options;
 
         checkOptions(null, options);
     }
@@ -59,8 +54,8 @@ public class EventBusChannel<T> extends AbstractChannel<T>
 
     @Override protected @NotNull MessageProducer<T> createProducer()
     {
-        final MessageProducer<T> producer = options.getDelivery() == ChannelOptions.Delivery.SEND ?
-            eventBus.sender(address, options) : eventBus.publisher(address, options);
+        final MessageProducer<T> producer = options().getDelivery() == ChannelOptions.Delivery.SEND ?
+            eventBus.sender(address, options()) : eventBus.publisher(address, options());
         //noinspection unchecked,unused
         return PartialFluentProxy.create(MessageProducer.class, producer, new Delegate<MessageProducer>(producer, lookup())
         {
@@ -81,7 +76,7 @@ public class EventBusChannel<T> extends AbstractChannel<T>
 
             MessageProducer<T> deliveryOptions(DeliveryOptions options)
             {
-                checkOptions(EventBusChannel.this.options, options);
+                checkOptions(options(), options);
                 return producer.deliveryOptions(options);
             }
 
@@ -100,11 +95,6 @@ public class EventBusChannel<T> extends AbstractChannel<T>
         return this;
     }
 
-    @Override public ChannelOptions options()
-    {
-        return new ChannelOptions(options);
-    }
-
     @Override public <E> Channel<E> channel(String address, ChannelOptions options)
     {
         return new EventBusChannel<>(eventBus, this.address + '.' + address, options);
@@ -119,23 +109,6 @@ public class EventBusChannel<T> extends AbstractChannel<T>
                 throw new IllegalArgumentException("EventBus does not support quality of service");
             if (oldOptions != null && oldOptions.getDelivery() != newOptions.getDelivery())
                 throw new IllegalArgumentException("EventBus channel cannot change delivery option");
-            if (!newOptions.isEcho())
-                setChannelIdHeader(options);
         }
-    }
-
-    private void setChannelIdHeader(DeliveryOptions options)
-    {
-        // Headers may not exist yet in DeliveryOptions
-        if (options.getHeaders() == null)
-            options.addHeader(ID_HEADER, channelId);
-        else
-            options.getHeaders().set(ID_HEADER, channelId);
-    }
-
-    private void filterEcho(Message<T> msg, Handler<Message<T>> handler)
-    {
-        if (options.isEcho() || !channelId.equals(msg.headers().get(ID_HEADER)))
-            handler.handle(msg);
     }
 }

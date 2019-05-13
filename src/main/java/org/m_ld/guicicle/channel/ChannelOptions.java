@@ -89,9 +89,11 @@ public class ChannelOptions extends DeliveryOptions implements ResponseStatusMap
         return statuses.getOrDefault(error.getClass().getSimpleName(), INTERNAL_SERVER_ERROR);
     }
 
-    public void setStatusForError(Class<? extends Throwable> errorClass, HttpResponseStatus status)
+    public ChannelOptions setStatusForError(Map<String, HttpResponseStatus> statusForError)
     {
-        statuses.put(errorClass.getSimpleName(), status);
+        statuses.clear();
+        statuses.putAll(statusForError);
+        return this;
     }
 
     public boolean isEcho()
@@ -129,12 +131,21 @@ public class ChannelOptions extends DeliveryOptions implements ResponseStatusMap
         return this;
     }
 
-    public ChannelOptions setDeliveryOptions(DeliveryOptions options)
+    public ChannelOptions setOptions(DeliveryOptions options)
     {
-        return setCodecName(options.getCodecName())
-            .setHeaders(options.getHeaders())
-            .setSendTimeout(options.getSendTimeout())
-            .setLocalOnly(options.isLocalOnly());
+        setCodecName(options.getCodecName());
+        setHeaders(options.getHeaders());
+        setSendTimeout(options.getSendTimeout());
+        setLocalOnly(options.isLocalOnly());
+        if (options instanceof ChannelOptions)
+        {
+            ChannelOptions channelOptions = (ChannelOptions)options;
+            setDelivery(channelOptions.getDelivery());
+            setQuality(channelOptions.getQuality());
+            setStatusForError(channelOptions.statuses);
+            setEcho(channelOptions.isEcho());
+        }
+        return this;
     }
 
     @Override public JsonObject toJson()

@@ -5,14 +5,27 @@
 
 package org.m_ld.guicicle.channel;
 
+import io.vertx.core.Handler;
+import io.vertx.core.eventbus.DeliveryOptions;
+import io.vertx.core.eventbus.Message;
 import io.vertx.core.eventbus.MessageConsumer;
 import io.vertx.core.eventbus.MessageProducer;
 import org.jetbrains.annotations.NotNull;
 
+import static org.m_ld.guicicle.mqtt.VertxMqttModule.generateRandomId;
+
 public abstract class AbstractChannel<T> implements Channel<T>
 {
+    private static final String ID_HEADER = "__channel.id";
+    private final String channelId = generateRandomId();
+    private final ChannelOptions options = new ChannelOptions();
     private MessageConsumer<T> consumer;
     private MessageProducer<T> producer;
+
+    public AbstractChannel(ChannelOptions options)
+    {
+        setOptions(options);
+    }
 
     @Override public final MessageConsumer<T> consumer()
     {
@@ -28,6 +41,11 @@ public abstract class AbstractChannel<T> implements Channel<T>
         return producer;
     }
 
+    @Override public ChannelOptions options()
+    {
+        return options;
+    }
+
     @Override public void close()
     {
         if (consumer != null)
@@ -36,7 +54,31 @@ public abstract class AbstractChannel<T> implements Channel<T>
             producer.close();
     }
 
+    protected String channelId()
+    {
+        return channelId;
+    }
+
     protected abstract @NotNull MessageConsumer<T> createConsumer();
 
     protected abstract @NotNull MessageProducer<T> createProducer();
+
+    protected void setOptions(DeliveryOptions newOptions)
+    {
+        options.setOptions(newOptions);
+        if (options.isEcho())
+            // Headers may not exist yet in DeliveryOptions
+            if (options.getHeaders() == null)
+                options.addHeader(ID_HEADER, channelId);
+            else
+                options.getHeaders().set(ID_HEADER, channelId);
+        else if (options.getHeaders() != null)
+            options.getHeaders().remove(ID_HEADER);
+    }
+
+    protected void filterEcho(Message<T> msg, Handler<Message<T>> handler)
+    {
+        if (options.isEcho() || !channelId.equals(msg.headers().get(ID_HEADER)))
+            handler.handle(msg);
+    }
 }

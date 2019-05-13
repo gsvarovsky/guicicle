@@ -116,7 +116,7 @@ public class MqttEventVertice implements ChannelProvider, Vertice
         mqtt.publishHandler(msg -> consumers.forEach(c -> c.onMessage(msg)))
             .subscribeCompletionHandler(msg -> consumers.forEach(c -> c.onSubscribeAck(msg)))
             .unsubscribeCompletionHandler(msg -> consumers.forEach(c -> c.onUnsubscribeAck(msg)))
-            .publishCompletionHandler(msg -> producers.forEach(p -> p.onPublished(msg)))
+            .publishCompletionHandler(msg -> producers.forEach(p -> p.onProduced(msg)))
             .exceptionHandler(exceptionHandlers)
             .connect(port, host, connectResult -> {
                 if (connectResult.succeeded())
@@ -167,15 +167,13 @@ public class MqttEventVertice implements ChannelProvider, Vertice
             throw new UnsupportedOperationException("Send with MQTT requires presence");
     }
 
-    private MultiMap messageHeaders(MqttPublishMessage message, @Nullable MultiMap fixedHeaders)
+    private MultiMap messageHeaders(MqttPublishMessage message)
     {
         final MultiMap headers = MultiMap.caseInsensitiveMultiMap();
-        if (fixedHeaders != null)
-            headers.addAll(fixedHeaders);
-        headers.add("mqtt.isDup", Boolean.toString(message.isDup()));
-        headers.add("mqtt.isRetain", Boolean.toString(message.isRetain()));
-        headers.add("mqtt.qosLevel", message.qosLevel().name());
-        headers.add("mqtt.messageId", Integer.toString(message.messageId()));
+        headers.add("__mqtt.isDup", Boolean.toString(message.isDup()));
+        headers.add("__mqtt.isRetain", Boolean.toString(message.isRetain()));
+        headers.add("__mqtt.qosLevel", message.qosLevel().name());
+        headers.add("__mqtt.messageId", Integer.toString(message.messageId()));
         return headers;
     }
 
@@ -190,32 +188,39 @@ public class MqttEventVertice implements ChannelProvider, Vertice
         WriteInFlight(T message, String messageId,
                       @Nullable Handler<? extends AsyncResult<? extends Message>> replyHandler)
         {
+            if (replyHandler != null && messageId == null)
+                throw new IllegalArgumentException("Reply handler can only be applied to send message");
+
             this.message = message;
             this.messageId = messageId;
             //noinspection unchecked
             this.replyHandler = (Handler<AsyncResult<Message>>)replyHandler;
         }
 
+        boolean isSend()
+        {
+            return messageId != null;
+        }
+
         @Override public String toString()
         {
-            return format("%s %s", messageId != null ? "Send" : "Publish", message);
+            return format("%s %s", isSend() ? "Send" : "Publish", message);
         }
     }
 
     private class MqttChannel<T> extends AbstractChannel<T>
     {
-        final String channelId = generateRandomId();
         final MqttTopicAddress topicAddress;
         final MqttChannelReplier replier;
         final Handlers<AsyncResult<Object>> producedHandlers = new Handlers<>();
-        ChannelOptions options;
-        MqttQoS qos;
 
         MqttChannel(String address, ChannelOptions options)
         {
+            super(options);
+
             this.topicAddress = pattern(requireNonNull(address));
-            setOptions(options);
-            replier = new MqttChannelReplier();
+            this.replier = new MqttChannelReplier();
+
             consumers.add(replier);
             producers.add(replier);
             replier.addEndHandler(v -> {
@@ -224,13 +229,15 @@ public class MqttEventVertice implements ChannelProvider, Vertice
             });
         }
 
-        void setOptions(DeliveryOptions options)
+        MqttQoS qos(DeliveryOptions options)
         {
-            if (options instanceof ChannelOptions)
-                this.options = new ChannelOptions((ChannelOptions)options);
-            else
-                this.options.setDeliveryOptions(options);
-            qos = MQTT_QOS.get(this.options.getQuality());
+            return options instanceof ChannelOptions ?
+                MQTT_QOS.get(((ChannelOptions)options).getQuality()) : qos();
+        }
+
+        MqttQoS qos()
+        {
+            return MQTT_QOS.get(options().getQuality());
         }
 
         @Override public <E> Channel<E> channel(String address, ChannelOptions options)
@@ -242,11 +249,6 @@ public class MqttEventVertice implements ChannelProvider, Vertice
         {
             producedHandlers.add(producedHandler);
             return this;
-        }
-
-        @Override public ChannelOptions options()
-        {
-            return options;
         }
 
         @Override protected @NotNull MessageConsumer<T> createConsumer()
@@ -297,20 +299,21 @@ public class MqttEventVertice implements ChannelProvider, Vertice
         abstract class MqttChannelWriter<M> extends MqttChannelStream implements MqttProducer
         {
             final Map<Object, WriteInFlight<M>> writesInFlight = new LinkedHashMap<>(bufferSize);
-            final MqttSendAddress sendAddress = SEND_ADDRESS.fromId(channelId).topic(address());
+            final MqttSendAddress sendAddress = SEND_ADDRESS.fromId(channelId()).topic(address());
             final Set<String> recentlySentTo = new HashSet<>();
 
-            void publish(WriteInFlight<M> wif, @Nullable DeliveryOptions options)
+            void write(WriteInFlight<M> wif, @Nullable DeliveryOptions options)
             {
-                final String address = wif.messageId == null ? address() : nextSendAddress(wif);
+                final String address = wif.isSend() ? nextSendAddress(wif) : address();
+                final MqttQoS qos = qos(options);
                 if (address != null)
                 {
                     final Buffer buffer = eventCodec.encodeToWire(
-                        wif.message, options == null ? MqttChannel.this.options : options);
+                        wif.message, options == null ? options() : options);
                     if (qos == MqttQoS.AT_MOST_ONCE)
                     {
                         mqtt.publish(address, buffer, qos, false, false);
-                        onPublished(wif);
+                        onProduced(wif);
                     }
                     else
                     {
@@ -336,6 +339,9 @@ public class MqttEventVertice implements ChannelProvider, Vertice
                 if (recentlySentTo.containsAll(present))
                     recentlySentTo.clear();
 
+                if (!options().isEcho())
+                    recentlySentTo.add(channelId());
+
                 final Optional<MqttSendAddress> sendAddress =
                     Sets.difference(present, recentlySentTo).stream().findAny().map(
                         toId -> this.sendAddress.toId(toId).messageId(wif.messageId));
@@ -346,14 +352,14 @@ public class MqttEventVertice implements ChannelProvider, Vertice
                 return sendAddress.map(MqttTopicAddress::toString).orElse(null);
             }
 
-            @Override public void onPublished(Integer id)
+            @Override public void onProduced(Integer id)
             {
                 final WriteInFlight<M> wif = writesInFlight.remove(id);
                 if (wif != null)
-                    onPublished(wif);
+                    onProduced(wif);
             }
 
-            void onPublished(WriteInFlight<M> wif)
+            void onProduced(WriteInFlight<M> wif)
             {
                 producedHandlers.handle(succeededFuture(wif.message));
                 if (wif.replyHandler != null)
@@ -363,12 +369,12 @@ public class MqttEventVertice implements ChannelProvider, Vertice
 
         class MqttChannelReplier extends MqttChannelWriter<Object> implements MqttConsumer
         {
-            final MqttReplyAddress consumeReplyAddress = REPLY_ADDRESS.toId(channelId);
+            final MqttReplyAddress consumeReplyAddress = REPLY_ADDRESS.toId(channelId());
             final Map<String, Handler<AsyncResult<Message>>> repliesInFlight = new HashMap<>();
 
             @Override public List<Subscription> subscriptions()
             {
-                return singletonList(subscription(consumeReplyAddress.toString(), qos));
+                return singletonList(subscription(consumeReplyAddress.toString(), qos()));
             }
 
             @Override public void onMessage(MqttPublishMessage message)
@@ -378,9 +384,10 @@ public class MqttEventVertice implements ChannelProvider, Vertice
                     final Handler<AsyncResult<Message>> replyHandler = repliesInFlight.remove(address.messageId());
                     if (replyHandler != null)
                     {
-                        final MultiMap headers = messageHeaders(message, options.getHeaders());
+                        final MultiMap headers = messageHeaders(message);
+                        final Object body = eventCodec.decodeFromWire(message.payload(), headers);
                         replyHandler.handle(succeededFuture(new MqttEventMessage<>(
-                            address(), headers, eventCodec.decodeFromWire(message.payload()), replier.create(address))));
+                            address(), headers, body, replier.create(address))));
                     }
                 });
             }
@@ -396,7 +403,7 @@ public class MqttEventVertice implements ChannelProvider, Vertice
                 return new MqttEventMessage.Replier()
                 {
                     final MqttReplyAddress replyAddress = REPLY_ADDRESS
-                        .fromId(channelId)
+                        .fromId(channelId())
                         .toId(address.fromId())
                         .messageId(address.messageId());
 
@@ -408,7 +415,7 @@ public class MqttEventVertice implements ChannelProvider, Vertice
                     @Override public <R> void reply(Object message, @Nullable DeliveryOptions options,
                                                     @Nullable Handler<AsyncResult<Message<R>>> replyHandler)
                     {
-                        publish(new WriteInFlight<>(message, replyAddress.messageId(), replyHandler), options);
+                        write(new WriteInFlight<>(message, replyAddress.messageId(), replyHandler), options);
                     }
                 };
             }
@@ -437,7 +444,7 @@ public class MqttEventVertice implements ChannelProvider, Vertice
 
             @Override public MqttChannelProducer write(T message)
             {
-                return write(message, options.getDelivery() == Delivery.SEND, null);
+                return write(message, options().getDelivery() == Delivery.SEND, null);
             }
 
             @Override public MqttChannelProducer setWriteQueueMaxSize(int maxSize)
@@ -477,15 +484,15 @@ public class MqttEventVertice implements ChannelProvider, Vertice
             void write(WriteInFlight<T> wif)
             {
                 if (connected)
-                    publish(wif, options);
+                    write(wif, options());
                 else
                     // Relying on the guaranteed ordering of the LinkedHashMap
                     writesInFlight.put(new Object(), wif);
             }
 
-            @Override void onPublished(WriteInFlight<T> wif)
+            @Override void onProduced(WriteInFlight<T> wif)
             {
-                super.onPublished(wif);
+                super.onProduced(wif);
                 if (writesInFlight.size() < writeQueueMaxSize / 2)
                     drainHandlers.handle(null);
             }
@@ -501,7 +508,7 @@ public class MqttEventVertice implements ChannelProvider, Vertice
 
         class MqttChannelConsumer extends MqttChannelStream implements MqttConsumer, MessageConsumer<T>
         {
-            final MqttSendAddress sendAddress = SEND_ADDRESS.toId(channelId).topic(address());
+            final MqttSendAddress sendAddress = SEND_ADDRESS.toId(channelId()).topic(address());
             final Handlers<Message<T>> messageHandlers = new Handlers<>();
             final Handlers<AsyncResult<Void>> subscribeHandlers = new Handlers<>(SINGLE_USE);
             final Handlers<AsyncResult<Void>> unsubscribeHandler = new Handlers<>(SINGLE_INSTANCE, SINGLE_USE);
@@ -542,7 +549,7 @@ public class MqttEventVertice implements ChannelProvider, Vertice
             @Override public MqttChannelConsumer resume()
             {
                 while (!pauseBuffer.isEmpty())
-                    messageHandlers.handle(pauseBuffer.remove());
+                    handleMessage(pauseBuffer.remove());
                 pauseBuffer = null;
                 return this;
             }
@@ -606,9 +613,9 @@ public class MqttEventVertice implements ChannelProvider, Vertice
                 if (!messageHandlers.isEmpty())
                 {
                     if (presence == null)
-                        return singletonList(subscription(address(), qos));
+                        return singletonList(subscription(address(), qos()));
                     else
-                        return asList(subscription(address(), qos), subscription(sendAddress.toString(), qos));
+                        return asList(subscription(address(), qos()), subscription(sendAddress.toString(), qos()));
                 }
                 else
                 {
@@ -635,19 +642,24 @@ public class MqttEventVertice implements ChannelProvider, Vertice
                 if (topicAddress.match(message.topicName()).isPresent() ||
                     (sent = sendAddress.match(message.topicName())).isPresent())
                 {
-                    final MultiMap headers = messageHeaders(message, options.getHeaders());
+                    final MultiMap headers = messageHeaders(message);
                     //noinspection unchecked
-                    final T payload = (T)eventCodec.decodeFromWire(message.payload());
+                    final T payload = (T)eventCodec.decodeFromWire(message.payload(), headers);
                     final MqttEventMessage<T> eventMessage = sent
                         .map(sentAddress -> new MqttEventMessage<>(
                             address(), headers, payload, replier.create(sentAddress)))
                         .orElseGet(() -> new MqttEventMessage<>(address(), headers, payload));
 
                     if (pauseBuffer == null)
-                        messageHandlers.handle(eventMessage);
+                        handleMessage(eventMessage);
                     else
                         pauseBuffer.add(eventMessage);
                 }
+            }
+
+            void handleMessage(MqttEventMessage<T> eventMessage)
+            {
+                filterEcho(eventMessage, messageHandlers);
             }
 
             @Override public void onSubscribeAck(MqttSubAckMessage subAckMessage)
@@ -658,11 +670,11 @@ public class MqttEventVertice implements ChannelProvider, Vertice
                     {
                         final MqttQoS qosReceived =
                             MqttQoS.valueOf(subAckMessage.grantedQoSLevels().get(qosIndex));
-                        if (qosReceived != qos)
+                        if (qosReceived != qos())
                             throw new IllegalStateException(
-                                format("Mismatched QoS: expecting %s, received %s", qos, qosReceived));
+                                format("Mismatched QoS: expecting %s, received %s", qos(), qosReceived));
                         if (presence != null) // Announce our presence
-                            presence.join(channelId, address());
+                            presence.join(channelId(), address());
 
                         subscribeHandlers.handle(succeededFuture());
                     }
@@ -688,7 +700,7 @@ public class MqttEventVertice implements ChannelProvider, Vertice
             {
                 super.close();
                 if (presence != null)
-                    presence.leave(channelId);
+                    presence.leave(channelId());
             }
         }
     }

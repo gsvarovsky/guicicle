@@ -7,7 +7,7 @@ package org.m_ld.guicicle.mqtt;
 
 public interface MqttProducer
 {
-    void onPublished(Integer id);
+    void onProduced(Integer id);
 
     default void onConnected() {}
 

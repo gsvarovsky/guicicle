@@ -16,6 +16,7 @@ import io.moquette.interception.messages.InterceptPublishMessage;
 import io.netty.handler.codec.mqtt.MqttQoS;
 import io.vertx.core.DeploymentOptions;
 import io.vertx.core.Future;
+import io.vertx.core.MultiMap;
 import io.vertx.core.eventbus.EventBus;
 import io.vertx.core.eventbus.impl.CodecManager;
 import io.vertx.core.json.JsonObject;
@@ -40,6 +41,7 @@ import java.io.IOException;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
+import static io.vertx.core.MultiMap.caseInsensitiveMultiMap;
 import static java.util.Collections.singletonList;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -113,7 +115,9 @@ public class VertxMqttPublishTest
         TestModule.run(channels -> {
             channels.channel("test", new ChannelOptions()).producer().write("Hello");
             published.get().setHandler(context.asyncAssertSuccess(msg -> {
-                assertEquals("Hello", EVENT_CODEC.decodeFromWire(msg.payload()));
+                MultiMap headers = caseInsensitiveMultiMap();
+                assertEquals("Hello", EVENT_CODEC.decodeFromWire(msg.payload(), headers));
+                assertEquals(0, headers.size());
                 assertEquals(MqttQoS.AT_MOST_ONCE, msg.qosLevel());
                 assertEquals("test", msg.topicName());
                 done.complete();
