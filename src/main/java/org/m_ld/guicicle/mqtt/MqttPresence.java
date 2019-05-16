@@ -5,6 +5,10 @@
 
 package org.m_ld.guicicle.mqtt;
 
+import io.netty.handler.codec.mqtt.MqttQoS;
+import io.vertx.core.AsyncResult;
+import io.vertx.core.Future;
+import io.vertx.core.Handler;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.mqtt.MqttClient;
 import io.vertx.mqtt.messages.MqttPublishMessage;
@@ -12,13 +16,15 @@ import org.jetbrains.annotations.NotNull;
 
 import java.util.*;
 
+import static io.netty.handler.codec.mqtt.MqttQoS.AT_LEAST_ONCE;
 import static io.netty.handler.codec.mqtt.MqttQoS.AT_MOST_ONCE;
+import static io.vertx.core.Future.succeededFuture;
 import static java.util.Collections.singletonList;
 import static java.util.stream.Collectors.toSet;
 import static org.m_ld.guicicle.mqtt.MqttConsumer.subscription;
 import static org.m_ld.guicicle.mqtt.MqttTopicAddress.pattern;
 
-public class MqttPresence implements MqttConsumer
+public class MqttPresence implements MqttConsumer, MqttProducer
 {
     private static class PresenceAddress extends MqttTopicAddress<PresenceAddress>
     {
@@ -34,9 +40,8 @@ public class MqttPresence implements MqttConsumer
         PresenceAddress(String[] parts)
         {
             super(parts);
-            final String[] tail = parts[0].split("/");
-            this.clientId = tail[0];
-            this.channelId = tail.length > 1 ? tail[1] : null;
+            this.clientId = parts[1];
+            this.channelId = parts.length > 2 ? parts[2] : null;
         }
 
         String clientId()
@@ -64,20 +69,26 @@ public class MqttPresence implements MqttConsumer
     private static final String DISCONNECTED = "-";
     private final MqttClient mqtt;
     private final Map<String, Map<String, MqttTopicAddress>> present = new HashMap<>();
+    private final Map<Integer, Handler<AsyncResult<Void>>> joinHandlers = new HashMap<>();
 
     MqttPresence(MqttClient mqtt)
     {
         this.mqtt = mqtt;
     }
 
-    void join(String consumerId, String address)
+    void join(String consumerId, String address, Handler<AsyncResult<Void>> handleResult)
     {
-        setStatus(consumerId, address);
+        setStatus(consumerId, address, AT_LEAST_ONCE).setHandler(msgIdResult -> {
+            if (msgIdResult.succeeded())
+                joinHandlers.put(msgIdResult.result(), handleResult);
+            else
+                handleResult.handle(msgIdResult.mapEmpty());
+        });
     }
 
     void leave(String consumerId)
     {
-        setStatus(consumerId, DISCONNECTED);
+        setStatus(consumerId, DISCONNECTED, AT_MOST_ONCE);
     }
 
     @NotNull Set<String> present(String address)
@@ -121,9 +132,20 @@ public class MqttPresence implements MqttConsumer
         });
     }
 
-    private void setStatus(String consumerId, String address)
+    @Override public void onProduced(Integer id)
     {
+        final Handler<AsyncResult<Void>> joinHandler = joinHandlers.remove(id);
+        if (joinHandler != null)
+            joinHandler.handle(succeededFuture());
+    }
+
+    @Override public void close() {}
+
+    private Future<Integer> setStatus(String consumerId, String address, MqttQoS qos)
+    {
+        final Future<Integer> packetSent = Future.future();
         mqtt.publish(PRESENCE_ADDRESS.withIds(mqtt.clientId(), consumerId).toString(),
-                     Buffer.buffer(address), AT_MOST_ONCE, false, true); // Retain for new clients
+                     Buffer.buffer(address), qos, false, true, packetSent); // Retain for new clients
+        return packetSent;
     }
 }

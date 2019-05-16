@@ -5,121 +5,44 @@
 
 package org.m_ld.guicicle.mqtt;
 
-import com.google.inject.multibindings.ProvidesIntoSet;
-import io.moquette.broker.Server;
-import io.moquette.broker.config.ClasspathResourceLoader;
-import io.moquette.broker.config.IConfig;
-import io.moquette.broker.config.IResourceLoader;
-import io.moquette.broker.config.ResourceLoaderConfig;
-import io.moquette.interception.AbstractInterceptHandler;
-import io.moquette.interception.messages.InterceptPublishMessage;
 import io.netty.handler.codec.mqtt.MqttQoS;
-import io.vertx.core.DeploymentOptions;
-import io.vertx.core.Future;
 import io.vertx.core.MultiMap;
-import io.vertx.core.eventbus.EventBus;
-import io.vertx.core.eventbus.impl.CodecManager;
+import io.vertx.core.eventbus.MessageProducer;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.unit.Async;
 import io.vertx.ext.unit.TestContext;
-import io.vertx.ext.unit.junit.RunTestOnContext;
-import io.vertx.ext.unit.junit.VertxUnitRunner;
-import io.vertx.mqtt.messages.MqttPublishMessage;
-import org.junit.AfterClass;
 import org.junit.BeforeClass;
-import org.junit.ClassRule;
 import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.m_ld.guicicle.Guicicle;
-import org.m_ld.guicicle.Vertice;
 import org.m_ld.guicicle.channel.Channel;
 import org.m_ld.guicicle.channel.ChannelOptions;
-import org.m_ld.guicicle.channel.ChannelProvider;
-import org.m_ld.guicicle.channel.ChannelProvider.Central;
 
 import java.io.IOException;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Consumer;
 
 import static io.vertx.core.MultiMap.caseInsensitiveMultiMap;
-import static java.util.Collections.singletonList;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 
-@RunWith(VertxUnitRunner.class)
-public class VertxMqttPublishTest
+public class VertxMqttPublishTest extends VertxMqttTest
 {
-    @ClassRule public static RunTestOnContext rule = new RunTestOnContext();
-    private static Server mqttBroker;
-    private static final AtomicReference<Future<MqttPublishMessage>> published = new AtomicReference<>();
-    private static final MqttEventCodec EVENT_CODEC = new MqttEventCodec(new CodecManager());
-
-    public static class TestModule extends VertxMqttModule
-    {
-        private static final AtomicReference<Consumer<ChannelProvider>> test = new AtomicReference<>();
-
-        @ProvidesIntoSet Vertice puppeteerVertice(@Central ChannelProvider channels, EventBus eventBus)
-        {
-            return new Vertice()
-            {
-                @Override public void start()
-                {
-                    eventBus.<Void>consumer("run.test", v -> test.get().accept(channels));
-                }
-            };
-        }
-
-        static void run(Consumer<ChannelProvider> theTest)
-        {
-            published.set(Future.future());
-            test.set(theTest);
-            rule.vertx().eventBus().publish("run.test", null);
-        }
-    }
+    private static JsonObject mqttOptions = new JsonObject(); // Default options
 
     @BeforeClass public static void setUp(TestContext context) throws IOException
     {
-        IResourceLoader classpathLoader = new ClasspathResourceLoader();
-        final IConfig classPathConfig = new ResourceLoaderConfig(classpathLoader);
-
-        mqttBroker = new Server();
-        mqttBroker.startServer(classPathConfig, singletonList(new AbstractInterceptHandler()
-        {
-            @Override
-            public String getID()
-            {
-                return "ServerPublishListener";
-            }
-
-            @Override
-            public void onPublish(InterceptPublishMessage msg)
-            {
-                published.get().complete(MqttPublishMessage.create(
-                    -1, msg.getQos(), msg.isDupFlag(), msg.isRetainFlag(),
-                    msg.getTopicName(), msg.getPayload().copy()));
-            }
-        }));
-
-        final Async deployed = context.async();
-        final DeploymentOptions options = new DeploymentOptions().setConfig(
-            new JsonObject()
-                .put("guice.module", TestModule.class.getName())
-                .put("mqtt", new JsonObject())); // All default options (no presence)
-
-        rule.vertx().deployVerticle(Guicicle.class, options, s -> deployed.complete());
+        VertxMqttTest.setUp(context, mqttOptions);
     }
 
     @Test public void testPublishString(TestContext context)
     {
         final Async done = context.async();
         TestModule.run(channels -> {
-            channels.channel("test", new ChannelOptions()).producer().write("Hello");
+            channels.channel("testPublishString",
+                             new ChannelOptions().addHeader("test", "fred")).producer().write("Hello");
             published.get().setHandler(context.asyncAssertSuccess(msg -> {
                 MultiMap headers = caseInsensitiveMultiMap();
                 assertEquals("Hello", EVENT_CODEC.decodeFromWire(msg.payload(), headers));
-                assertEquals(0, headers.size());
+                assertEquals("fred", headers.get("test"));
                 assertEquals(MqttQoS.AT_MOST_ONCE, msg.qosLevel());
-                assertEquals("test", msg.topicName());
+                assertEquals("testPublishString", msg.topicName());
                 done.complete();
             }));
         });
@@ -131,7 +54,8 @@ public class VertxMqttPublishTest
         TestModule.run(channels -> {
             try
             {
-                channels.channel("test", new ChannelOptions()).producer().send("Hello");
+                channels.channel("testNoSendBecauseNoPresence",
+                                 new ChannelOptions()).producer().send("Hello");
                 context.fail();
             }
             catch (UnsupportedOperationException e)
@@ -145,20 +69,39 @@ public class VertxMqttPublishTest
     {
         final Async done = context.async();
         TestModule.run(channels -> {
-            final Channel<String> channel = channels.channel("test", new ChannelOptions().setEcho(true));
-            channel.consumer().handler(msg -> {
-                assertEquals("Hello", msg.body());
-                assertEquals("test", msg.address());
-                assertFalse(msg.isSend());
-                done.complete();
-            }).completionHandler(context.asyncAssertSuccess(
-                v -> channel.producer().write("Hello")));
+            final Channel<String> channel = channels.channel("testEchoString",
+                                                             new ChannelOptions().setEcho(true));
+            channel.consumer()
+                .handler(msg -> {
+                    assertEquals("Hello", msg.body());
+                    assertEquals("testEchoString", msg.address());
+                    assertFalse(msg.isSend());
+                    done.complete();
+                })
+                // Write the message when the consumer has been registered
+                .completionHandler(context.asyncAssertSuccess(v -> channel.producer().write("Hello")));
         });
     }
 
-    @AfterClass public static void tearDown()
+    @Test public void testNoEchoInteger(TestContext context)
     {
-        // Shut down Vert.x first to suppress dead sockets when disconnecting the MQTT Vertice
-        rule.vertx().close(v -> mqttBroker.stopServer());
+        final Async done = context.async();
+        TestModule.run(channels -> {
+            final Channel<Integer> channel = channels.channel("testNoEchoInteger",
+                                                              new ChannelOptions().setEcho(false));
+            channel.consumer()
+                .handler(msg -> {
+                    if (msg.body() == 2)
+                        done.complete();
+                    else
+                        context.fail();
+                })
+                .completionHandler(context.asyncAssertSuccess(v -> {
+                    final MessageProducer<Integer> producer = channel.producer();
+                    producer.write(1);
+                    producer.deliveryOptions(new ChannelOptions().setEcho(true));
+                    producer.write(2);
+                }));
+        });
     }
 }

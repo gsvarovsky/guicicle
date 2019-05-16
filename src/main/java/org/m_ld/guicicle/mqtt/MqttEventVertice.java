@@ -106,7 +106,11 @@ public class MqttEventVertice implements ChannelProvider, Vertice
     @Inject(optional = true) public void setHasPresence(@Named("config.mqtt.hasPresence") boolean hasPresence)
     {
         if (hasPresence && presence == null)
-            consumers.add(presence = new MqttPresence(mqtt));
+        {
+            presence = new MqttPresence(mqtt);
+            consumers.add(presence);
+            producers.add(presence);
+        }
         else if (!hasPresence && presence != null)
             throw new IllegalStateException("Cannot remove presence once requested");
     }
@@ -674,9 +678,9 @@ public class MqttEventVertice implements ChannelProvider, Vertice
                             throw new IllegalStateException(
                                 format("Mismatched QoS: expecting %s, received %s", qos(), qosReceived));
                         if (presence != null) // Announce our presence
-                            presence.join(channelId(), address());
-
-                        subscribeHandlers.handle(succeededFuture());
+                            presence.join(channelId(), address(), subscribeHandlers);
+                        else
+                            subscribeHandlers.handle(succeededFuture());
                     }
                     catch (Exception e)
                     {

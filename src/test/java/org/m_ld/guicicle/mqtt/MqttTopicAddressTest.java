@@ -7,7 +7,6 @@ package org.m_ld.guicicle.mqtt;
 
 import org.junit.Test;
 
-import static java.util.Collections.singletonList;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.m_ld.guicicle.mqtt.MqttTopicAddress.pattern;
@@ -29,10 +28,10 @@ public class MqttTopicAddressTest
     @Test
     public void testSubTreeMatch() throws Throwable
     {
-        assertEquals(singletonList("anything"), pattern("#").match("anything").orElseThrow(AssertionError::new));
-        assertEquals(singletonList("thing"), pattern("any/#").match("any/thing").orElseThrow(AssertionError::new));
-        assertEquals(singletonList("th/ing"), pattern("any/#").match("any/th/ing").orElseThrow(AssertionError::new));
-        assertEquals(singletonList("ing"), pattern("any/th/#").match("any/th/ing").orElseThrow(AssertionError::new));
+        assertEquals(pattern("anything"), pattern("#").match("anything").orElseThrow(AssertionError::new));
+        assertEquals(pattern("any/thing"), pattern("any/#").match("any/thing").orElseThrow(AssertionError::new));
+        assertEquals(pattern("any/th/ing"), pattern("any/#").match("any/th/ing").orElseThrow(AssertionError::new));
+        assertEquals(pattern("any/th/ing"), pattern("any/th/#").match("any/th/ing").orElseThrow(AssertionError::new));
     }
 
     @Test
@@ -46,10 +45,10 @@ public class MqttTopicAddressTest
     @Test
     public void testSingleLevelMatch() throws Throwable
     {
-        assertEquals(singletonList("thing"), pattern("any/+").match("any/thing").orElseThrow(AssertionError::new));
-        assertEquals(singletonList("ing"), pattern("any/th/+").match("any/th/ing").orElseThrow(AssertionError::new));
-        assertEquals(singletonList("th"), pattern("any/+/ing").match("any/th/ing").orElseThrow(AssertionError::new));
-        assertEquals(singletonList("any"), pattern("+/th/ing").match("any/th/ing").orElseThrow(AssertionError::new));
+        assertEquals(pattern("any/thing"), pattern("any/+").match("any/thing").orElseThrow(AssertionError::new));
+        assertEquals(pattern("any/th/ing"), pattern("any/th/+").match("any/th/ing").orElseThrow(AssertionError::new));
+        assertEquals(pattern("any/th/ing"), pattern("any/+/ing").match("any/th/ing").orElseThrow(AssertionError::new));
+        assertEquals(pattern("any/th/ing"), pattern("+/th/ing").match("any/th/ing").orElseThrow(AssertionError::new));
     }
 
     @Test

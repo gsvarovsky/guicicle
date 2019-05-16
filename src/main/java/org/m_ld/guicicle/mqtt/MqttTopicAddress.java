@@ -5,11 +5,12 @@
 
 package org.m_ld.guicicle.mqtt;
 
-import java.util.*;
+import java.util.AbstractList;
+import java.util.Arrays;
+import java.util.Optional;
 
 import static java.lang.String.join;
 import static java.util.Arrays.asList;
-import static java.util.Arrays.copyOfRange;
 
 public abstract class MqttTopicAddress<T extends MqttTopicAddress<T>> extends AbstractList<String>
 {
@@ -61,26 +62,20 @@ public abstract class MqttTopicAddress<T extends MqttTopicAddress<T>> extends Ab
 
     public Optional<T> match(String topicName)
     {
-        final List<String> matched = new ArrayList<>(parts.length);
         final String[] names = topicName.split("/");
         int i = 0, j = 0;
         for ( ; i < parts.length && j < names.length; i++, j++)
         {
             if (parts[i].equals("#"))
             {
-                matched.add(toString(copyOfRange(names, j, names.length, String[].class)));
-                return Optional.of(create(matched.toArray(new String[0])));
+                return Optional.of(create(names));
             }
-            else if (parts[i].equals("+"))
-            {
-                matched.add(names[j]);
-            }
-            else if (!parts[i].equals(names[j]))
+            else if (!parts[i].equals("+") && !parts[i].equals(names[j]))
             {
                 return Optional.empty();
             }
         }
-        return i == j && j == names.length ? Optional.of(create(matched.toArray(new String[0]))) : Optional.empty();
+        return i == j && j == names.length ? Optional.of(create(names)) : Optional.empty();
     }
 
     public T substitute(String... substitutions)

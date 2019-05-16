@@ -66,7 +66,7 @@ public abstract class AbstractChannel<T> implements Channel<T>
     protected void setOptions(DeliveryOptions newOptions)
     {
         options.setOptions(newOptions);
-        if (options.isEcho())
+        if (!options.isEcho())
             // Headers may not exist yet in DeliveryOptions
             if (options.getHeaders() == null)
                 options.addHeader(ID_HEADER, channelId);
@@ -78,7 +78,7 @@ public abstract class AbstractChannel<T> implements Channel<T>
 
     protected void filterEcho(Message<T> msg, Handler<Message<T>> handler)
     {
-        if (options.isEcho() || !channelId.equals(msg.headers().get(ID_HEADER)))
+        if (!channelId.equals(msg.headers().get(ID_HEADER)))
             handler.handle(msg);
     }
 }

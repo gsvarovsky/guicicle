@@ -6,23 +6,32 @@
 package org.m_ld.guicicle.mqtt;
 
 import io.netty.handler.codec.mqtt.MqttQoS;
+import io.vertx.core.AsyncResult;
+import io.vertx.core.Handler;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.mqtt.MqttClient;
 import io.vertx.mqtt.messages.MqttPublishMessage;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnitRunner;
 
+import java.util.concurrent.atomic.AtomicReference;
+
+import static io.vertx.core.Future.succeededFuture;
 import static java.util.Collections.emptySet;
 import static java.util.Collections.singleton;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.*;
 
 @RunWith(MockitoJUnitRunner.class) public class MqttPresenceTest
 {
     @Mock MqttClient mqtt;
+    @Captor ArgumentCaptor<Handler<AsyncResult<Integer>>> sendHandlerCapture;
 
     @Before
     public void setUp()
@@ -32,22 +41,29 @@ import static org.mockito.Mockito.*;
 
     @Test public void testJoin()
     {
-        new MqttPresence(mqtt).join("channel1", "address");
-        verify(mqtt).publish("__presence/client1/channel1",
-                             Buffer.buffer("address"),
-                             MqttQoS.AT_MOST_ONCE,
-                             false,
-                             true);
+        final AtomicReference<AsyncResult<Void>> joined = new AtomicReference<>();
+        final MqttPresence presence = new MqttPresence(mqtt);
+        presence.join("channel1", "address", joined::set);
+        verify(mqtt).publish(eq("__presence/client1/channel1"),
+                             eq(Buffer.buffer("address")),
+                             eq(MqttQoS.AT_LEAST_ONCE),
+                             eq(false),
+                             eq(true),
+                             sendHandlerCapture.capture());
+        sendHandlerCapture.getValue().handle(succeededFuture(1));
+        presence.onProduced(1);
+        assertTrue(joined.get().succeeded());
     }
 
     @Test public void testLeave()
     {
         new MqttPresence(mqtt).leave("channel1");
-        verify(mqtt).publish("__presence/client1/channel1",
-                             Buffer.buffer("-"),
-                             MqttQoS.AT_MOST_ONCE,
-                             false,
-                             true);
+        verify(mqtt).publish(eq("__presence/client1/channel1"),
+                             eq(Buffer.buffer("-")),
+                             eq(MqttQoS.AT_MOST_ONCE),
+                             eq(false),
+                             eq(true),
+                             any());
     }
 
     @Test public void testNoConsumeRandomMessage()

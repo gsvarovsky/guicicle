@@ -131,6 +131,12 @@ public class ChannelOptions extends DeliveryOptions implements ResponseStatusMap
         return this;
     }
 
+    @Override public ChannelOptions addHeader(String key, String value)
+    {
+        super.addHeader(key, value);
+        return this;
+    }
+
     public ChannelOptions setOptions(DeliveryOptions options)
     {
         setCodecName(options.getCodecName());
