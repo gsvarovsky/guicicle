@@ -23,7 +23,6 @@ import io.vertx.ext.unit.TestContext;
 import io.vertx.ext.unit.junit.RunTestOnContext;
 import io.vertx.ext.unit.junit.VertxUnitRunner;
 import io.vertx.mqtt.messages.MqttPublishMessage;
-import org.junit.AfterClass;
 import org.junit.ClassRule;
 import org.junit.runner.RunWith;
 import org.m_ld.guicicle.Guicicle;
@@ -73,24 +72,27 @@ public abstract class VertxMqttTest
         IResourceLoader classpathLoader = new ClasspathResourceLoader();
         final IConfig classPathConfig = new ResourceLoaderConfig(classpathLoader);
 
-        mqttBroker = new Server();
-        mqttBroker.startServer(classPathConfig, singletonList(new AbstractInterceptHandler()
+        if (mqttBroker == null)
         {
-            @Override
-            public String getID()
+            mqttBroker = new Server();
+            mqttBroker.startServer(classPathConfig, singletonList(new AbstractInterceptHandler()
             {
-                return "ServerPublishListener";
-            }
+                @Override
+                public String getID()
+                {
+                    return "ServerPublishListener";
+                }
 
-            @Override
-            public void onPublish(InterceptPublishMessage msg)
-            {
-                published.get().complete(MqttPublishMessage.create(
-                    -1, msg.getQos(), msg.isDupFlag(), msg.isRetainFlag(),
-                    msg.getTopicName(), msg.getPayload().copy()));
-                published.set(Future.future());
-            }
-        }));
+                @Override
+                public void onPublish(InterceptPublishMessage msg)
+                {
+                    published.get().complete(MqttPublishMessage.create(
+                        -1, msg.getQos(), msg.isDupFlag(), msg.isRetainFlag(),
+                        msg.getTopicName(), msg.getPayload().copy()));
+                    published.set(Future.future());
+                }
+            }));
+        }
 
         final Async deployed = context.async();
         final DeploymentOptions options = new DeploymentOptions().setConfig(
@@ -99,11 +101,5 @@ public abstract class VertxMqttTest
                 .put("mqtt", mqttOptions)); // All default options (no presence)
 
         rule.vertx().deployVerticle(Guicicle.class, options, s -> deployed.complete());
-    }
-
-    @AfterClass public static void tearDown()
-    {
-        // Shut down Vert.x first to suppress dead sockets when disconnecting the MQTT Vertice
-        rule.vertx().close(v -> mqttBroker.stopServer());
     }
 }
