@@ -152,7 +152,7 @@ public class MqttEventVertice implements ChannelProvider, Vertice
         return new MqttChannel<>(address, options);
     }
 
-    private void subscribe(List<MqttConsumer> consumers)
+    private void subscribe(Iterable<MqttConsumer> consumers)
     {
         final Map<String, Integer> topics = new LinkedHashMap<>();
         final Map<MqttConsumer, Integer> consumerQosIndex = new HashMap<>();
@@ -231,6 +231,7 @@ public class MqttEventVertice implements ChannelProvider, Vertice
                 consumers.remove(replier);
                 producers.remove(replier);
             });
+            subscribe(singletonList(replier));
         }
 
         MqttQoS qos(DeliveryOptions options)
@@ -309,29 +310,30 @@ public class MqttEventVertice implements ChannelProvider, Vertice
             void write(WriteInFlight<M> wif, @Nullable DeliveryOptions options)
             {
                 final String address = wif.isSend() ? nextSendAddress(wif) : address();
-                final MqttQoS qos = qos(options);
                 if (address != null)
-                {
-                    final Buffer buffer = eventCodec.encodeToWire(
-                        wif.message, options == null ? options() : options);
-                    if (qos == MqttQoS.AT_MOST_ONCE)
-                    {
-                        mqtt.publish(address, buffer, qos, false, false);
-                        onProduced(wif);
-                    }
-                    else
-                    {
-                        mqtt.publish(address, buffer, qos, false, false, published -> {
-                            if (published.succeeded())
-                                writesInFlight.put(published.result(), wif);
-                            else
-                                producedHandlers.handle(published.mapEmpty());
-                        });
-                    }
-                }
-                else if (qos != MqttQoS.AT_MOST_ONCE)
-                {
+                    write(address, wif, options);
+                else if (qos(options) != MqttQoS.AT_MOST_ONCE)
                     producedHandlers.handle(failedFuture(format("No suitable address found for %s", wif)));
+            }
+
+            void write(String address, WriteInFlight<M> wif, @Nullable DeliveryOptions options)
+            {
+                final MqttQoS qos = qos(options);
+                final Buffer buffer = eventCodec.encodeToWire(
+                    wif.message, options == null ? options() : options);
+                if (qos == MqttQoS.AT_MOST_ONCE)
+                {
+                    mqtt.publish(address, buffer, qos, false, false);
+                    onProduced(wif);
+                }
+                else
+                {
+                    mqtt.publish(address, buffer, qos, false, false, published -> {
+                        if (published.succeeded())
+                            writesInFlight.put(published.result(), wif);
+                        else
+                            producedHandlers.handle(published.mapEmpty());
+                    });
                 }
             }
 
@@ -350,8 +352,16 @@ public class MqttEventVertice implements ChannelProvider, Vertice
                     Sets.difference(present, recentlySentTo).stream().findAny().map(
                         toId -> this.sendAddress.toId(toId).messageId(wif.messageId));
 
-                if (!sendAddress.isPresent() && wif.replyHandler != null)
-                    wif.replyHandler.handle(failedFuture(format("No-one present on %s to send message to", address())));
+                if (!sendAddress.isPresent())
+                {
+                    if (wif.replyHandler != null)
+                        wif.replyHandler.handle(
+                            failedFuture(format("No-one present on %s to send message to", address())));
+                }
+                else
+                {
+                    recentlySentTo.add(sendAddress.get().toId());
+                }
 
                 return sendAddress.map(MqttTopicAddress::toString).orElse(null);
             }
@@ -419,7 +429,9 @@ public class MqttEventVertice implements ChannelProvider, Vertice
                     @Override public <R> void reply(Object message, @Nullable DeliveryOptions options,
                                                     @Nullable Handler<AsyncResult<Message<R>>> replyHandler)
                     {
-                        write(new WriteInFlight<>(message, replyAddress.messageId(), replyHandler), options);
+                        write(replyAddress.toString(),
+                              new WriteInFlight<>(message, replyAddress.messageId(), replyHandler),
+                              options);
                     }
                 };
             }

@@ -24,11 +24,9 @@ import static org.junit.Assert.assertFalse;
 
 public class VertxMqttPublishTest extends VertxMqttTest
 {
-    private static JsonObject mqttOptions = new JsonObject(); // Default options
-
     @BeforeClass public static void setUp(TestContext context) throws IOException
     {
-        VertxMqttTest.setUp(context, mqttOptions);
+        VertxMqttTest.setUp(context, new JsonObject()); // All default options
     }
 
     @Test public void testPublishString(TestContext context)
