@@ -58,11 +58,6 @@ public abstract class MqttDirectAddress<T extends MqttDirectAddress<T>> extends 
             super("__send/+/+/+/#");
         }
 
-        public String topic()
-        {
-            return get(4);
-        }
-
         public MqttSendAddress topic(String topic)
         {
             return substitute(4, topic);
@@ -85,7 +80,17 @@ public abstract class MqttDirectAddress<T extends MqttDirectAddress<T>> extends 
 
         private MqttReplyAddress()
         {
-            super("__reply/+/+/+");
+            super("__reply/+/+/+/+");
+        }
+
+        public String sentMessageId()
+        {
+            return get(4);
+        }
+
+        public MqttReplyAddress sentMessageId(String sentMessageId)
+        {
+            return substitute(4, sentMessageId);
         }
 
         private MqttReplyAddress(String[] parts)

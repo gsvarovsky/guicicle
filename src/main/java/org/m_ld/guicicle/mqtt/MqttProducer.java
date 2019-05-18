@@ -5,11 +5,11 @@
 
 package org.m_ld.guicicle.mqtt;
 
-public interface MqttProducer
+import org.m_ld.guicicle.VertxCloseable;
+
+public interface MqttProducer extends VertxCloseable
 {
     void onProduced(Integer id);
 
     default void onConnected() {}
-
-    default void close() {}
 }

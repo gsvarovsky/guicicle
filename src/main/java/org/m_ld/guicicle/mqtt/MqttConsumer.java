@@ -9,10 +9,11 @@ import io.netty.handler.codec.mqtt.MqttQoS;
 import io.vertx.core.AsyncResult;
 import io.vertx.mqtt.messages.MqttPublishMessage;
 import io.vertx.mqtt.messages.MqttSubAckMessage;
+import org.m_ld.guicicle.VertxCloseable;
 
 import java.util.List;
 
-public interface MqttConsumer
+public interface MqttConsumer extends VertxCloseable
 {
     interface Subscription
     {
@@ -46,6 +47,4 @@ public interface MqttConsumer
     default void onSubscribeAck(MqttSubAckMessage subAckMessage) {}
 
     default void onUnsubscribeAck(int messageId) {}
-
-    default void close() {}
 }

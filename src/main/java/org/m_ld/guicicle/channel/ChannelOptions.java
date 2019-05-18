@@ -34,6 +34,7 @@ public class ChannelOptions extends DeliveryOptions implements ResponseStatusMap
     private Quality quality = Quality.AT_MOST_ONCE;
     private Map<String, HttpResponseStatus> statuses = new HashMap<>();
     private boolean echo = false;
+    private int bufferSize = 128;
 
     public ChannelOptions()
     {
@@ -46,6 +47,7 @@ public class ChannelOptions extends DeliveryOptions implements ResponseStatusMap
         this.quality = other.quality;
         this.statuses.putAll(other.statuses);
         this.echo = other.echo;
+        this.bufferSize = other.bufferSize;
     }
 
     public ChannelOptions(JsonObject json)
@@ -60,6 +62,8 @@ public class ChannelOptions extends DeliveryOptions implements ResponseStatusMap
                 toMap(Map.Entry::getKey, e -> HttpResponseStatus.parseLine(e.getValue().toString()))));
         if (json.containsKey("echo"))
             this.echo = json.getBoolean("echo");
+        if (json.containsKey("bufferSize"))
+            this.bufferSize = json.getInteger("bufferSize");
     }
 
     public Delivery getDelivery()
@@ -107,6 +111,16 @@ public class ChannelOptions extends DeliveryOptions implements ResponseStatusMap
         return this;
     }
 
+    public int getBufferSize()
+    {
+        return bufferSize;
+    }
+
+    public void setBufferSize(int bufferSize)
+    {
+        this.bufferSize = bufferSize;
+    }
+
     @Override public ChannelOptions setSendTimeout(long timeout)
     {
         super.setSendTimeout(timeout);
@@ -150,6 +164,7 @@ public class ChannelOptions extends DeliveryOptions implements ResponseStatusMap
             setQuality(channelOptions.getQuality());
             setStatusForError(channelOptions.statuses);
             setEcho(channelOptions.isEcho());
+            setBufferSize(channelOptions.getBufferSize());
         }
         return this;
     }
@@ -163,6 +178,7 @@ public class ChannelOptions extends DeliveryOptions implements ResponseStatusMap
             json.put("statuses", new JsonObject(statuses.entrySet().stream().collect(
                 toMap(Map.Entry::getKey, e -> e.getValue().toString()))));
         json.put("echo", echo);
+        json.put("bufferSize", bufferSize);
         return json;
     }
 }

@@ -119,4 +119,24 @@ public class VertxMqttSendTest extends VertxMqttTest
                     }))));
         });
     }
+
+    @Test public void testReplyToReply(TestContext context)
+    {
+        final Async done = context.async();
+        TestModule.run(channels -> {
+            final Channel<String> channel = channels.channel("testReplyToReply",
+                                                             new ChannelOptions().setEcho(true));
+            channel.consumer()
+                .handler(msg -> msg.reply("World", context.asyncAssertSuccess(reply -> {
+                    assertEquals("!", reply.body());
+                    assertEquals("testReplyToReply", reply.address());
+                    done.complete();
+                })))
+                .completionHandler(context.asyncAssertSuccess(
+                    v -> channel.producer().<String>send("Hello", context.asyncAssertSuccess(reply -> {
+                        assertEquals("World", reply.body());
+                        reply.reply("!");
+                    }))));
+        });
+    }
 }

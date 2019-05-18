@@ -13,6 +13,7 @@ import io.vertx.core.buffer.Buffer;
 import io.vertx.mqtt.MqttClient;
 import io.vertx.mqtt.messages.MqttPublishMessage;
 import org.jetbrains.annotations.NotNull;
+import org.m_ld.guicicle.Handlers;
 
 import java.util.*;
 
@@ -21,6 +22,7 @@ import static io.netty.handler.codec.mqtt.MqttQoS.AT_MOST_ONCE;
 import static io.vertx.core.Future.succeededFuture;
 import static java.util.Collections.singletonList;
 import static java.util.stream.Collectors.toSet;
+import static org.m_ld.guicicle.Handlers.Flag.SINGLE_USE;
 import static org.m_ld.guicicle.mqtt.MqttConsumer.subscription;
 import static org.m_ld.guicicle.mqtt.MqttTopicAddress.pattern;
 
@@ -70,6 +72,7 @@ public class MqttPresence implements MqttConsumer, MqttProducer
     private final MqttClient mqtt;
     private final Map<String, Map<String, MqttTopicAddress>> present = new HashMap<>();
     private final Map<Integer, Handler<AsyncResult<Void>>> joinHandlers = new HashMap<>();
+    private final Handlers<Void> closeHandlers = new Handlers<>(SINGLE_USE);
 
     MqttPresence(MqttClient mqtt)
     {
@@ -139,7 +142,16 @@ public class MqttPresence implements MqttConsumer, MqttProducer
             joinHandler.handle(succeededFuture());
     }
 
-    @Override public void close() {}
+    @Override public void addCloseHandler(Handler<Void> closeHandler)
+    {
+        closeHandlers.add(closeHandler);
+    }
+
+    @Override public void close()
+    {
+        mqtt.unsubscribe(PRESENCE_ADDRESS.toString());
+        closeHandlers.handle(null);
+    }
 
     private Future<Integer> setStatus(String consumerId, String address, MqttQoS qos)
     {
