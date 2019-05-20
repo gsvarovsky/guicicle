@@ -16,7 +16,7 @@ import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import org.m_ld.guicicle.channel.*;
 import org.m_ld.guicicle.channel.ChannelProvider.Local;
-import org.m_ld.guicicle.http.ResponseStatusMapper;
+import org.m_ld.guicicle.web.ResponseStatusMapper;
 
 import java.util.List;
 import java.util.Map;
@@ -47,19 +47,14 @@ public class VertxCoreModule extends AbstractModule
         newSetBinder(binder(), Vertice.class);
     }
 
-    private void bindObjectFields(String prefix, JsonObject object)
-    {
-        object.fieldNames().forEach(
-            key -> bindJsonValue(prefix.isEmpty() ? key : prefix + '.' + key, object.getValue(key)));
-    }
-
     private void bindJsonValue(String key, Object value)
     {
         if (value instanceof JsonObject)
         {
-            bindObjectFields(key, (JsonObject)value);
-            bind(JsonObject.class).annotatedWith(Names.named(key)).toInstance(((JsonObject)value));
-            bind(Map.class).annotatedWith(Names.named(key)).toInstance(((JsonObject)value).getMap());
+            final JsonObject jsonObject = (JsonObject)value;
+            bind(JsonObject.class).annotatedWith(Names.named(key)).toInstance(jsonObject);
+            bind(Map.class).annotatedWith(Names.named(key)).toInstance(jsonObject.getMap());
+            jsonObject.fieldNames().forEach(name -> bindJsonValue(key + '.' + name, jsonObject.getValue(name)));
         }
         else if (value instanceof JsonArray)
         {
@@ -78,14 +73,10 @@ public class VertxCoreModule extends AbstractModule
         codecs.forEach(codec -> {
             final Class dataClass = codec.getDataClass();
             if (isFinal(dataClass.getModifiers()))
-            {
                 //noinspection unchecked
                 vertx.eventBus().registerDefaultCodec(dataClass, codec);
-            }
             else
-            {
                 vertx.eventBus().registerCodec(codec);
-            }
         });
         return vertx;
     }

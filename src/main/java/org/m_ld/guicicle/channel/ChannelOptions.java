@@ -9,7 +9,7 @@ import io.netty.handler.codec.http.HttpResponseStatus;
 import io.vertx.core.MultiMap;
 import io.vertx.core.eventbus.DeliveryOptions;
 import io.vertx.core.json.JsonObject;
-import org.m_ld.guicicle.http.ResponseStatusMapper;
+import org.m_ld.guicicle.web.ResponseStatusMapper;
 
 import java.util.HashMap;
 import java.util.Map;

@@ -3,7 +3,7 @@
  * Licensed under the MIT License. See LICENSE file in the project root for full license information.
  */
 
-package org.m_ld.guicicle.http;
+package org.m_ld.guicicle.web;
 
 import io.netty.handler.codec.http.HttpResponseStatus;
 
