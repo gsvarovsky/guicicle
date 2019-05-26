@@ -15,6 +15,7 @@ import io.vertx.core.Vertx;
 import io.vertx.core.json.JsonArray;
 import org.jetbrains.annotations.NotNull;
 
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.stream.Stream;
@@ -66,7 +67,8 @@ public class Guicicle extends AbstractVerticle
     private Stream<String> appModuleClassNames()
     {
         return config().getJsonArray("guice.modules", new JsonArray(
-            singletonList(config().getString("guice.module")))).stream().map(Object::toString);
+            singletonList(config().getString("guice.module"))))
+            .stream().filter(Objects::nonNull).map(Object::toString);
     }
 
     @Override public void start(Future<Void> startFuture)
