@@ -10,6 +10,7 @@ import io.vertx.core.Handler;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.RoutingContext;
 
+import javax.inject.Inject;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -18,7 +19,7 @@ public class JsonErrorHandler implements Handler<RoutingContext>
     private static final Logger LOG = Logger.getLogger(JsonErrorHandler.class.getName());
     private final ResponseStatusMapper statusMapper;
 
-    public JsonErrorHandler(ResponseStatusMapper statusMapper)
+    @Inject public JsonErrorHandler(ResponseStatusMapper statusMapper)
     {
         this.statusMapper = statusMapper;
     }

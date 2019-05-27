@@ -11,6 +11,7 @@ import com.google.inject.Singleton;
 import com.google.inject.multibindings.ProvidesIntoSet;
 import io.vertx.core.Vertx;
 import io.vertx.core.eventbus.EventBus;
+import io.vertx.core.eventbus.impl.CodecManager;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import org.m_ld.guicicle.channel.*;
@@ -22,6 +23,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.Executor;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 
 import static com.google.common.collect.Maps.immutableEntry;
 import static com.google.inject.multibindings.Multibinder.newSetBinder;
@@ -94,15 +97,28 @@ public class VertxCoreModule extends AbstractModule
 
     @Provides @Singleton Vertx vertx(Set<ChannelCodec> codecs)
     {
+        registerCodecs(codecs, vertx.eventBus()::registerCodec, vertx.eventBus()::registerDefaultCodec);
+        return vertx;
+    }
+
+    @Provides CodecManager codecManager(Set<ChannelCodec> codecs)
+    {
+        final CodecManager codecManager = new CodecManager();
+        registerCodecs(codecs, codecManager::registerCodec, codecManager::registerDefaultCodec);
+        return codecManager;
+    }
+
+    private void registerCodecs(Set<ChannelCodec> codecs,
+                                Consumer<ChannelCodec> registerCodec,
+                                BiConsumer<Class, ChannelCodec> registerDefaultCodec)
+    {
         codecs.forEach(codec -> {
             final Class dataClass = codec.getDataClass();
             if (isFinal(dataClass.getModifiers()))
-                //noinspection unchecked
-                vertx.eventBus().registerDefaultCodec(dataClass, codec);
+                registerDefaultCodec.accept(dataClass, codec);
             else
-                vertx.eventBus().registerCodec(codec);
+                registerCodec.accept(codec);
         });
-        return vertx;
     }
 
     @Provides EventBus eventBus(Vertx vertx)

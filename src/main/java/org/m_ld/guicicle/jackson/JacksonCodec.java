@@ -6,7 +6,9 @@
 package org.m_ld.guicicle.jackson;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.type.TypeFactory;
 import io.vertx.core.buffer.Buffer;
 import org.m_ld.guicicle.channel.ChannelCodec;
 
@@ -16,11 +18,21 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class JacksonCodec<T> extends ChannelCodec<T>
 {
     private final ObjectMapper objectMapper;
+    private final TypeReference dataType;
 
     public JacksonCodec(ObjectMapper objectMapper, Class<T> dataClass, String name)
     {
         super(dataClass, name);
         this.objectMapper = objectMapper;
+        this.dataType = null;
+    }
+
+    public JacksonCodec(ObjectMapper objectMapper, TypeReference dataType, String name)
+    {
+        //noinspection unchecked
+        super((Class<T>)TypeFactory.rawClass(dataType.getType()), name);
+        this.objectMapper = objectMapper;
+        this.dataType = dataType;
     }
 
     @Override
@@ -44,7 +56,10 @@ public class JacksonCodec<T> extends ChannelCodec<T>
         try
         {
             final int length = buffer.getInt(pos.getAndAdd(4));
-            return objectMapper.readValue(buffer.getBytes(pos.get(), pos.addAndGet(length)), dataClass);
+            final byte[] bytes = buffer.getBytes(pos.get(), pos.addAndGet(length));
+            return dataType == null ?
+                objectMapper.readValue(bytes, dataClass) :
+                objectMapper.readValue(bytes, dataType);
         }
         catch (IOException e)
         {
