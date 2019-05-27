@@ -383,9 +383,12 @@ class MqttChannel<T> extends AbstractChannel<T>
 
         @Override public MqttChannelConsumer resume()
         {
-            while (!pauseBuffer.isEmpty())
-                handleMessage(pauseBuffer.remove());
-            pauseBuffer = null;
+            if (pauseBuffer != null)
+            {
+                while (!pauseBuffer.isEmpty())
+                    handleMessage(pauseBuffer.remove());
+                pauseBuffer = null;
+            }
             return this;
         }
 
