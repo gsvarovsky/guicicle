@@ -42,9 +42,9 @@ import static org.mockito.Mockito.*;
     @Test public void testJoin()
     {
         final AtomicReference<AsyncResult<Void>> joined = new AtomicReference<>();
-        final MqttPresence presence = new MqttPresence(mqtt);
+        final MqttPresence presence = new MqttPresence(mqtt, "domain");
         presence.join("channel1", "address", joined::set);
-        verify(mqtt).publish(eq("__presence/client1/channel1"),
+        verify(mqtt).publish(eq("__presence/domain/client1/channel1"),
                              eq(Buffer.buffer("address")),
                              eq(MqttQoS.AT_LEAST_ONCE),
                              eq(false),
@@ -57,8 +57,8 @@ import static org.mockito.Mockito.*;
 
     @Test public void testLeave()
     {
-        new MqttPresence(mqtt).leave("channel1");
-        verify(mqtt).publish(eq("__presence/client1/channel1"),
+        new MqttPresence(mqtt, "domain").leave("channel1");
+        verify(mqtt).publish(eq("__presence/domain/client1/channel1"),
                              eq(Buffer.buffer("-")),
                              eq(MqttQoS.AT_MOST_ONCE),
                              eq(false),
@@ -70,16 +70,16 @@ import static org.mockito.Mockito.*;
     {
         final MqttPublishMessage msg = mock(MqttPublishMessage.class);
         when(msg.topicName()).thenReturn("random/stuff");
-        final MqttPresence presence = new MqttPresence(mqtt);
+        final MqttPresence presence = new MqttPresence(mqtt, "domain");
         presence.onMessage(msg);
     }
 
     @Test public void testConsumeConsumerConnectedMessage()
     {
         final MqttPublishMessage msg = mock(MqttPublishMessage.class);
-        when(msg.topicName()).thenReturn("__presence/client1/channel1");
+        when(msg.topicName()).thenReturn("__presence/domain/client1/channel1");
         when(msg.payload()).thenReturn(Buffer.buffer("address"));
-        final MqttPresence presence = new MqttPresence(mqtt);
+        final MqttPresence presence = new MqttPresence(mqtt, "domain");
         presence.onMessage(msg);
         assertEquals(singleton("channel1"), presence.present("address"));
     }
@@ -87,9 +87,9 @@ import static org.mockito.Mockito.*;
     @Test public void testPresenceMatchesAddress()
     {
         final MqttPublishMessage msg = mock(MqttPublishMessage.class);
-        when(msg.topicName()).thenReturn("__presence/client1/channel1");
+        when(msg.topicName()).thenReturn("__presence/domain/client1/channel1");
         when(msg.payload()).thenReturn(Buffer.buffer("#"));
-        final MqttPresence presence = new MqttPresence(mqtt);
+        final MqttPresence presence = new MqttPresence(mqtt, "domain");
         presence.onMessage(msg);
         assertEquals(singleton("channel1"), presence.present("address"));
     }
@@ -97,9 +97,9 @@ import static org.mockito.Mockito.*;
     @Test public void testConsumeUnknownConsumerDisconnectedMessage()
     {
         final MqttPublishMessage msg = mock(MqttPublishMessage.class);
-        when(msg.topicName()).thenReturn("__presence/client1/channel1");
+        when(msg.topicName()).thenReturn("__presence/domain/client1/channel1");
         when(msg.payload()).thenReturn(Buffer.buffer("-"));
-        final MqttPresence presence = new MqttPresence(mqtt);
+        final MqttPresence presence = new MqttPresence(mqtt, "domain");
         presence.onMessage(msg);
         assertEquals(emptySet(), presence.present("address"));
     }
@@ -107,11 +107,11 @@ import static org.mockito.Mockito.*;
     @Test public void testConsumeKnownConsumerDisconnectedMessage()
     {
         final MqttPublishMessage msg1 = mock(MqttPublishMessage.class), msg2 = mock(MqttPublishMessage.class);
-        when(msg1.topicName()).thenReturn("__presence/client1/channel1");
+        when(msg1.topicName()).thenReturn("__presence/domain/client1/channel1");
         when(msg1.payload()).thenReturn(Buffer.buffer("address"));
-        when(msg2.topicName()).thenReturn("__presence/client1/channel1");
+        when(msg2.topicName()).thenReturn("__presence/domain/client1/channel1");
         when(msg2.payload()).thenReturn(Buffer.buffer("-"));
-        final MqttPresence presence = new MqttPresence(mqtt);
+        final MqttPresence presence = new MqttPresence(mqtt, "domain");
         presence.onMessage(msg1);
         presence.onMessage(msg2);
         assertEquals(emptySet(), presence.present("address"));
@@ -120,11 +120,11 @@ import static org.mockito.Mockito.*;
     @Test public void testConsumeClientLwtMessage()
     {
         final MqttPublishMessage msg1 = mock(MqttPublishMessage.class), msg2 = mock(MqttPublishMessage.class);
-        when(msg1.topicName()).thenReturn("__presence/client1/channel1");
+        when(msg1.topicName()).thenReturn("__presence/domain/client1/channel1");
         when(msg1.payload()).thenReturn(Buffer.buffer("address"));
-        when(msg2.topicName()).thenReturn("__presence/client1");
+        when(msg2.topicName()).thenReturn("__presence/domain/client1");
         when(msg2.payload()).thenReturn(Buffer.buffer("-"));
-        final MqttPresence presence = new MqttPresence(mqtt);
+        final MqttPresence presence = new MqttPresence(mqtt, "domain");
         presence.onMessage(msg1);
         presence.onMessage(msg2);
         assertEquals(emptySet(), presence.present("address"));

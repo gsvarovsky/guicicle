@@ -34,7 +34,7 @@ public class MqttPresence implements MqttConsumer, MqttProducer
 
         PresenceAddress()
         {
-            super("__presence/#");
+            super("__presence/+/#");
             this.clientId = "";
             this.channelId = null;
         }
@@ -42,8 +42,13 @@ public class MqttPresence implements MqttConsumer, MqttProducer
         PresenceAddress(String[] parts)
         {
             super(parts);
-            this.clientId = parts[1];
-            this.channelId = parts.length > 2 ? parts[2] : null;
+            this.clientId = parts[2];
+            this.channelId = parts.length > 3 ? parts[3] : null;
+        }
+
+        PresenceAddress domain(String domain)
+        {
+            return substitute(1, domain);
         }
 
         String clientId()
@@ -58,7 +63,7 @@ public class MqttPresence implements MqttConsumer, MqttProducer
 
         PresenceAddress withIds(String clientId, String channelId)
         {
-            return substitute(clientId + "/" + channelId);
+            return substitute(2, clientId + "/" + channelId);
         }
 
         @Override protected PresenceAddress create(String[] parts)
@@ -67,16 +72,18 @@ public class MqttPresence implements MqttConsumer, MqttProducer
         }
     }
 
-    private static final PresenceAddress PRESENCE_ADDRESS = new PresenceAddress();
     private static final String DISCONNECTED = "-";
+    private static final PresenceAddress PRESENCE_ADDRESS = new PresenceAddress();
+    private final PresenceAddress baseAddress;
     private final MqttClient mqtt;
     private final Map<String, Map<String, MqttTopicAddress>> present = new HashMap<>();
     private final Map<Integer, Handler<AsyncResult<Void>>> joinHandlers = new HashMap<>();
     private final Handlers<Void> closeHandlers = new Handlers<>(SINGLE_USE);
 
-    MqttPresence(MqttClient mqtt)
+    MqttPresence(MqttClient mqtt, String domain)
     {
         this.mqtt = mqtt;
+        this.baseAddress = PRESENCE_ADDRESS.domain(domain);
     }
 
     void join(String consumerId, String address, Handler<AsyncResult<Void>> handleResult)
@@ -105,12 +112,12 @@ public class MqttPresence implements MqttConsumer, MqttProducer
 
     @Override public List<Subscription> subscriptions()
     {
-        return singletonList(subscription(PRESENCE_ADDRESS.toString(), AT_MOST_ONCE));
+        return singletonList(subscription(baseAddress.toString(), AT_MOST_ONCE));
     }
 
     @Override public void onMessage(MqttPublishMessage msg)
     {
-        PRESENCE_ADDRESS.match(msg.topicName()).ifPresent(presence -> {
+        baseAddress.match(msg.topicName()).ifPresent(presence -> {
             final String address = msg.payload().toString();
             if (DISCONNECTED.equals(address))
             {
@@ -149,14 +156,14 @@ public class MqttPresence implements MqttConsumer, MqttProducer
 
     @Override public void close()
     {
-        mqtt.unsubscribe(PRESENCE_ADDRESS.toString());
+        mqtt.unsubscribe(baseAddress.toString());
         closeHandlers.handle(null);
     }
 
     private Future<Integer> setStatus(String consumerId, String address, MqttQoS qos)
     {
         final Future<Integer> packetSent = Future.future();
-        mqtt.publish(PRESENCE_ADDRESS.withIds(mqtt.clientId(), consumerId).toString(),
+        mqtt.publish(baseAddress.withIds(mqtt.clientId(), consumerId).toString(),
                      Buffer.buffer(address), qos, false, true, packetSent); // Retain for new clients
         return packetSent;
     }

@@ -72,15 +72,15 @@ public class MqttEventVertice implements ChannelProvider, Vertice, MqttEventClie
         this.host = host;
     }
 
-    @Inject(optional = true) public void setHasPresence(@Named("config.mqtt.hasPresence") boolean hasPresence)
+    @Inject(optional = true) public void setPresenceDomain(@Named("config.mqtt.presence.domain") String domain)
     {
-        if (hasPresence && presence == null)
+        if (domain != null && presence == null)
         {
-            presence = new MqttPresence(mqtt);
+            presence = new MqttPresence(mqtt, domain);
             consumers.add(presence);
             producers.add(presence);
         }
-        else if (!hasPresence && presence != null)
+        else if (domain == null && presence != null)
             throw new IllegalStateException("Cannot remove presence once requested");
     }
 
