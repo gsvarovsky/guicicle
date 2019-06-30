@@ -78,7 +78,7 @@ public class MqttPresence implements MqttConsumer, MqttProducer
     private final MqttClient mqtt;
     private final Map<String, Map<String, MqttTopicAddress>> present = new HashMap<>();
     private final Map<Integer, Handler<AsyncResult<Void>>> joinHandlers = new HashMap<>();
-    private final Handlers<Void> closeHandlers = new Handlers<>(SINGLE_USE);
+    private final Handlers<AsyncResult<Void>> closeHandlers = new Handlers<>(SINGLE_USE);
 
     MqttPresence(MqttClient mqtt, String domain)
     {
@@ -149,7 +149,7 @@ public class MqttPresence implements MqttConsumer, MqttProducer
             joinHandler.handle(succeededFuture());
     }
 
-    @Override public void addCloseHandler(Handler<Void> closeHandler)
+    @Override public void addCloseHandler(Handler<AsyncResult<Void>> closeHandler)
     {
         closeHandlers.add(closeHandler);
     }

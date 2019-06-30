@@ -5,10 +5,11 @@
 
 package org.m_ld.guicicle;
 
+import io.vertx.core.AsyncResult;
 import io.vertx.core.Handler;
 
 public interface VertxCloseable
 {
-    void addCloseHandler(Handler<Void> endHandler);
+    void addCloseHandler(Handler<AsyncResult<Void>> endHandler);
     void close();
 }

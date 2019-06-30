@@ -5,7 +5,6 @@
 
 package org.m_ld.guicicle.channel;
 
-import io.vertx.core.Handler;
 import io.vertx.core.eventbus.DeliveryOptions;
 import io.vertx.core.eventbus.Message;
 import io.vertx.core.eventbus.MessageConsumer;
@@ -76,9 +75,8 @@ public abstract class AbstractChannel<T> implements Channel<T>
             options.getHeaders().remove(ID_HEADER);
     }
 
-    protected void filterEcho(Message<T> msg, Handler<Message<T>> handler)
+    protected boolean isEcho(Message<T> msg)
     {
-        if (!channelId.equals(msg.headers().get(ID_HEADER)))
-            handler.handle(msg);
+        return channelId.equals(msg.headers().get(ID_HEADER));
     }
 }

@@ -98,10 +98,17 @@ class MqttChannel<T> extends AbstractChannel<T>
         return producer;
     }
 
+    private void produced(AsyncResult<Object> event, MqttEventInFlight<?> wif)
+    {
+        producedHandlers.handle(event);
+        if (wif.producedHandler != null)
+            wif.producedHandler.handle(event.mapEmpty());
+    }
+
     class MqttChannelStream implements VertxCloseable
     {
         Handler<Throwable> exceptionHandler;
-        final Handlers<Void> endHandlers = new Handlers<>(SINGLE_USE);
+        final Handlers<AsyncResult<Void>> endHandlers = new Handlers<>(SINGLE_USE);
 
         public String address()
         {
@@ -114,7 +121,7 @@ class MqttChannel<T> extends AbstractChannel<T>
             mqttEventClient.exceptionHandlers().add(exceptionHandler = handler);
         }
 
-        public void addCloseHandler(Handler<Void> endHandler)
+        public void addCloseHandler(Handler<AsyncResult<Void>> endHandler)
         {
             this.endHandlers.add(endHandler);
         }
@@ -138,7 +145,7 @@ class MqttChannel<T> extends AbstractChannel<T>
             if (address != null)
                 write(address, wif, options);
             else if (qos(options) != MqttQoS.AT_MOST_ONCE)
-                producedHandlers.handle(failedFuture(format("No suitable address found for %s", wif)));
+                produced(failedFuture(format("No suitable address found for %s", wif)), wif);
         }
 
         void write(String address, MqttEventInFlight<M> wif, @Nullable DeliveryOptions options)
@@ -155,7 +162,7 @@ class MqttChannel<T> extends AbstractChannel<T>
                         else
                             writesInFlight.put(published.result(), wif);
                     else
-                        producedHandlers.handle(published.mapEmpty());
+                        produced(published.mapEmpty(), wif);
                 });
         }
 
@@ -196,7 +203,7 @@ class MqttChannel<T> extends AbstractChannel<T>
 
         void onProduced(MqttEventInFlight<M> wif)
         {
-            producedHandlers.handle(succeededFuture(wif.message));
+            produced(succeededFuture(wif.message), wif);
             if (wif.replyHandler != null)
                 replier.repliesInFlight.put(wif.messageId, wif.replyHandler);
         }
@@ -287,6 +294,12 @@ class MqttChannel<T> extends AbstractChannel<T>
             return this;
         }
 
+        @Override public MessageProducer<T> write(T message, Handler<AsyncResult<Void>> handler)
+        {
+            write(new MqttEventInFlight<>(message, options().getDelivery(), handler));
+            return this;
+        }
+
         @Override public MqttChannelProducer setWriteQueueMaxSize(int maxSize)
         {
             writeQueueMaxSize = maxSize;
@@ -312,6 +325,17 @@ class MqttChannel<T> extends AbstractChannel<T>
 
         @Override public void end()
         {
+            close();
+        }
+
+        @Override public void end(Handler<AsyncResult<Void>> handler)
+        {
+            close(handler);
+        }
+
+        @Override public void close(Handler<AsyncResult<Void>> handler)
+        {
+            endHandlers.add(handler);
             close();
         }
 
@@ -400,7 +424,10 @@ class MqttChannel<T> extends AbstractChannel<T>
 
         @Override public MqttChannelConsumer endHandler(Handler<Void> endHandler)
         {
-            addCloseHandler(endHandler);
+            addCloseHandler(result -> {
+                if (result.succeeded())
+                    endHandler.handle(null);
+            });
             return this;
         }
 
@@ -498,7 +525,11 @@ class MqttChannel<T> extends AbstractChannel<T>
 
         void handleMessage(MqttEventMessage<T> eventMessage)
         {
-            filterEcho(eventMessage, messageHandlers);
+            // Strictly, only published messages need to be filtered.
+            // Sends are filtered in the producer (see MqttChannelWriter#nextSendAddress)
+            // Note that isEcho will always return false if the original message options allowed echoes
+            if (!isEcho(eventMessage))
+                messageHandlers.handle(eventMessage);
         }
 
         @Override public void onSubscribeAck(MqttSubAckMessage subAckMessage)

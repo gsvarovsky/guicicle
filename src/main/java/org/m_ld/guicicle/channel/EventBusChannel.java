@@ -7,6 +7,7 @@ package org.m_ld.guicicle.channel;
 
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Handler;
+import io.vertx.core.MultiMap;
 import io.vertx.core.eventbus.*;
 import io.vertx.core.eventbus.impl.BodyReadStream;
 import io.vertx.core.streams.ReadStream;
@@ -20,9 +21,40 @@ import static java.lang.invoke.MethodHandles.lookup;
 
 public class EventBusChannel<T> extends AbstractChannel<T>
 {
+    private static final String RESEND = "__channel.resend", REJECTED_ECHO = "__channel.reject";
+    private static final int RESEND_THRESHOLD = 3;
+
     private final EventBus eventBus;
     private final String address;
     private final Handlers<AsyncResult<Object>> producedHandlers = new Handlers<>();
+
+    private class Resend
+    {
+        int attempts;
+
+        Resend()
+        {
+            this.attempts = 0;
+        }
+
+        Resend(MultiMap headers)
+        {
+            this.attempts = headers.contains(RESEND) ?
+                Integer.valueOf(headers.get(RESEND)) : 0;
+        }
+
+        DeliveryOptions nextOptions()
+        {
+            final DeliveryOptions options = new DeliveryOptions(options());
+            options.getHeaders().set(RESEND, Integer.toString(++attempts));
+            return options;
+        }
+
+        boolean canResend()
+        {
+            return attempts < RESEND_THRESHOLD;
+        }
+    }
 
     public EventBusChannel(EventBus eventBus, String address, ChannelOptions options)
     {
@@ -42,7 +74,22 @@ public class EventBusChannel<T> extends AbstractChannel<T>
         {
             MessageConsumer<T> handler(Handler<Message<T>> handler)
             {
-                return consumer.handler(msg -> filterEcho(msg, handler));
+                return consumer.handler(msg -> {
+                    final Resend resend;
+                    if (isEcho(msg))
+                    {
+                        // If the message is a publish, or has already been resent enough, just ignore it
+                        if (msg.isSend() && (resend = new Resend(msg.headers())).canResend())
+                            if (msg.replyAddress() == null)
+                                eventBus.send(address, msg.body(), resend.nextOptions());
+                            else
+                                msg.reply(REJECTED_ECHO);
+                    }
+                    else
+                    {
+                        handler.handle(msg);
+                    }
+                });
             }
 
             ReadStream<T> bodyStream()
@@ -61,16 +108,31 @@ public class EventBusChannel<T> extends AbstractChannel<T>
         {
             MessageProducer<T> send(T message)
             {
+                // Note that echoes are handled in the consumer
                 return produced(producer.send(message), message);
             }
 
             <R> MessageProducer<T> send(T message, Handler<AsyncResult<Message<R>>> replyHandler)
             {
-                return produced(producer.send(message, replyHandler), message);
+                final Resend resend = new Resend();
+                return produced(producer.<R>send(
+                    message, replyResult -> handleReply(message, replyResult, replyHandler, resend)), message);
+            }
+
+            private <R> void handleReply(T message, AsyncResult<Message<R>> replyResult,
+                                         Handler<AsyncResult<Message<R>>> replyHandler, Resend resend)
+            {
+                // Handle a signal to resend an echoed message
+                if (replyResult.succeeded() && REJECTED_ECHO.equals(replyResult.result().body()))
+                    eventBus.<R>send(address, message, resend.nextOptions(),
+                                     nextReplyResult -> handleReply(message, nextReplyResult, replyHandler, resend));
+                else
+                    replyHandler.handle(replyResult);
             }
 
             MessageProducer<T> write(T data)
             {
+                // Note that echoes are handled in the consumer
                 return produced(producer.write(data), data);
             }
 
@@ -78,13 +140,6 @@ public class EventBusChannel<T> extends AbstractChannel<T>
             {
                 checkOptions(options(), options);
                 return producer.deliveryOptions(options);
-            }
-
-            private MessageProducer<T> produced(MessageProducer<T> producer, T message)
-            {
-                // The event bus is AT_MOST_ONCE, so immediately notify the handler
-                producedHandlers.handle(succeededFuture(message));
-                return producer;
             }
         });
     }
@@ -106,9 +161,16 @@ public class EventBusChannel<T> extends AbstractChannel<T>
         {
             final ChannelOptions newOptions = (ChannelOptions)options;
             if (newOptions.getQuality() != ChannelOptions.Quality.AT_MOST_ONCE)
-                throw new IllegalArgumentException("EventBus does not support quality of service");
+                throw new UnsupportedOperationException("EventBus does not support quality of service");
             if (oldOptions != null && oldOptions.getDelivery() != newOptions.getDelivery())
-                throw new IllegalArgumentException("EventBus channel cannot change delivery option");
+                throw new UnsupportedOperationException("EventBus channel cannot change delivery option");
         }
+    }
+
+    private MessageProducer<T> produced(MessageProducer<T> producer, T message)
+    {
+        // The event bus is AT_MOST_ONCE, so immediately notify the handler
+        producedHandlers.handle(succeededFuture(message));
+        return producer;
     }
 }
