@@ -72,30 +72,30 @@ public interface Channel<T> extends ChannelProvider
     }
 
     /**
-     * Utility to reply to a requests using the given async response. If the response is failed, the request is failed
-     * with an error code provided by the {@link #options()}.
+     * Utility to reply to a requests by handling the given async response. If the response is failed, the request is
+     * failed with an error code provided by the {@link #options()}.
      * <p>
      * If an {@code ack} is given, it will be provided with any response acknowledgement.
      *
-     * @param request  the request
-     * @param response the asynchronous response
-     * @param ack      an optional future which will be completed when the response is acknowledged
+     * @param request the request
+     * @param ack     an optional future which will be completed when the response is acknowledged
      */
-    default <R> void respond(Message<T> request, AsyncResult<?> response,
-                             @Nullable Handler<AsyncResult<Message<R>>> ack)
+    default <R, A> Handler<AsyncResult<R>> respond(Message<T> request, @Nullable Handler<AsyncResult<Message<A>>> ack)
     {
-        if (response.succeeded())
-        {
-            if (ack == null)
-                request.reply(response.result(), options());
+        return response -> {
+            if (response.succeeded())
+            {
+                if (ack == null)
+                    request.reply(response.result(), options());
+                else
+                    request.reply(response.result(), options(), ack);
+            }
             else
-                request.reply(response.result(), options(), ack);
-        }
-        else
-        {
-            final HttpResponseStatus status = options().getStatusForError(response.cause());
-            request.fail(status.code(), status.reasonPhrase());
-        }
+            {
+                final HttpResponseStatus status = options().getStatusForError(response.cause());
+                request.fail(status.code(), status.reasonPhrase());
+            }
+        };
     }
 
     /**
