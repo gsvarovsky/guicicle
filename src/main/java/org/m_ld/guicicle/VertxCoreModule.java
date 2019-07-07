@@ -97,27 +97,43 @@ public class VertxCoreModule extends AbstractModule
 
     @Provides @Singleton Vertx vertx(Set<ChannelCodec> codecs)
     {
-        registerCodecs(codecs, vertx.eventBus()::registerCodec, vertx.eventBus()::registerDefaultCodec);
+        registerCodecs(codecs,
+                       vertx.eventBus()::registerCodec,
+                       vertx.eventBus()::unregisterCodec,
+                       vertx.eventBus()::registerDefaultCodec,
+                       vertx.eventBus()::unregisterDefaultCodec);
         return vertx;
     }
 
     @Provides CodecManager codecManager(Set<ChannelCodec> codecs)
     {
         final CodecManager codecManager = new CodecManager();
-        registerCodecs(codecs, codecManager::registerCodec, codecManager::registerDefaultCodec);
+        registerCodecs(codecs,
+                       codecManager::registerCodec,
+                       codecManager::unregisterCodec,
+                       codecManager::registerDefaultCodec,
+                       codecManager::unregisterDefaultCodec);
         return codecManager;
     }
 
     private void registerCodecs(Set<ChannelCodec> codecs,
                                 Consumer<ChannelCodec> registerCodec,
-                                BiConsumer<Class, ChannelCodec> registerDefaultCodec)
+                                Consumer<String> unregisterCodec,
+                                BiConsumer<Class, ChannelCodec> registerDefaultCodec,
+                                Consumer<Class> unregisterDefaultCodec)
     {
         codecs.forEach(codec -> {
             final Class dataClass = codec.getDataClass();
             if (isFinal(dataClass.getModifiers()))
+            {
+                unregisterDefaultCodec.accept(dataClass);
                 registerDefaultCodec.accept(dataClass, codec);
+            }
             else
+            {
+                unregisterCodec.accept(codec.name());
                 registerCodec.accept(codec);
+            }
         });
     }
 
