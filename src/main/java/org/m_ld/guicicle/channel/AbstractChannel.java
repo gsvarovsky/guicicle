@@ -42,7 +42,7 @@ public abstract class AbstractChannel<T> implements Channel<T>
 
     @Override public ChannelOptions options()
     {
-        return options;
+        return new ChannelOptions(options);
     }
 
     @Override public void close()

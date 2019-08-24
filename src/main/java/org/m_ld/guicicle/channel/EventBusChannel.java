@@ -40,7 +40,7 @@ public class EventBusChannel<T> extends AbstractChannel<T>
         Resend(MultiMap headers)
         {
             this.attempts = headers.contains(RESEND) ?
-                Integer.valueOf(headers.get(RESEND)) : 0;
+                Integer.parseInt(headers.get(RESEND)) : 0;
         }
 
         DeliveryOptions nextOptions()
