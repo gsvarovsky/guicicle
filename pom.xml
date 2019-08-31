@@ -11,7 +11,7 @@
 
     <groupId>org.m-ld</groupId>
     <artifactId>guicicle</artifactId>
-    <version>0.1.3</version>
+    <version>0.1.4</version>
 
     <properties>
         <guice.version>4.2.2</guice.version>

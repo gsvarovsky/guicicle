@@ -13,6 +13,7 @@ import io.vertx.core.Vertx;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 
 /**
  * A "Vert(.x Serv)ice" is an injectable Verticle-like singleton that is {@link #start}ed and {@link #stop}ped from a
@@ -73,6 +74,21 @@ public interface Vertice
      */
     default void stop()
     {
+    }
+
+    /**
+     * Converts a Vert.x fluent-style asynchronous API call to Promise-style, returning a {@code Future} and discarding
+     * the redundant current object return value.
+     *
+     * @param fluentApi the fluent API, normally returning the callee.
+     * @param <T>       the asynchronous result type
+     * @return a {@code Future} (promise) of the API result
+     */
+    static <T> Future<T> when(Consumer<Handler<AsyncResult<T>>> fluentApi)
+    {
+        final Future<T> future = Future.future();
+        fluentApi.accept(future);
+        return future;
     }
 
     /**
