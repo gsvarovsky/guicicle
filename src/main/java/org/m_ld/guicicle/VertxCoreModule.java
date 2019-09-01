@@ -11,9 +11,11 @@ import com.google.inject.Singleton;
 import com.google.inject.multibindings.ProvidesIntoSet;
 import io.vertx.core.Vertx;
 import io.vertx.core.eventbus.EventBus;
+import io.vertx.core.eventbus.MessageCodec;
 import io.vertx.core.eventbus.impl.CodecManager;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
+import io.vertx.core.shareddata.LocalMap;
 import org.m_ld.guicicle.channel.*;
 import org.m_ld.guicicle.channel.ChannelProvider.Local;
 import org.m_ld.guicicle.web.ResponseStatusMapper;
@@ -23,12 +25,11 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.Executor;
-import java.util.function.BiConsumer;
-import java.util.function.Consumer;
 
 import static com.google.common.collect.Maps.immutableEntry;
 import static com.google.inject.multibindings.Multibinder.newSetBinder;
 import static com.google.inject.name.Names.named;
+import static java.lang.String.format;
 import static java.lang.reflect.Modifier.isFinal;
 import static java.util.Collections.singletonList;
 import static java.util.stream.Collectors.toMap;
@@ -97,44 +98,84 @@ public class VertxCoreModule extends AbstractModule
 
     @Provides @Singleton Vertx vertx(Set<ChannelCodec> codecs)
     {
-        registerCodecs(codecs,
-                       vertx.eventBus()::registerCodec,
-                       vertx.eventBus()::unregisterCodec,
-                       vertx.eventBus()::registerDefaultCodec,
-                       vertx.eventBus()::unregisterDefaultCodec);
+        final LocalMap<String, String> regCodecs = vertx.sharedData().getLocalMap("guicicle.codecs");
+        new CodecRegistrar()
+        {
+            @Override void registerCodec(ChannelCodec codec, boolean isDefault)
+            {
+                if (isDefault)
+                    //noinspection unchecked
+                    vertx.eventBus().registerDefaultCodec(codec.getDataClass(), codec);
+                else
+                    vertx.eventBus().registerCodec(codec);
+
+                regCodecs.put(codec.name(), codec.getDataClass().getName());
+            }
+
+            @Override String getRegisteredCodecDataClassName(String codecName)
+            {
+                return regCodecs.get(codecName);
+            }
+        }.registerCodecs(codecs);
         return vertx;
     }
 
     @Provides CodecManager codecManager(Set<ChannelCodec> codecs)
     {
         final CodecManager codecManager = new CodecManager();
-        registerCodecs(codecs,
-                       codecManager::registerCodec,
-                       codecManager::unregisterCodec,
-                       codecManager::registerDefaultCodec,
-                       codecManager::unregisterDefaultCodec);
+        new CodecRegistrar()
+        {
+            @Override void registerCodec(ChannelCodec codec, boolean isDefault)
+            {
+                if (isDefault)
+                    //noinspection unchecked
+                    codecManager.registerDefaultCodec(codec.getDataClass(), codec);
+                else
+                    codecManager.registerCodec(codec);
+            }
+
+            @Override String getRegisteredCodecDataClassName(String codecName)
+            {
+                final MessageCodec existing = codecManager.getCodec(codecName);
+                if (existing != null)
+                {
+                    if (existing instanceof ChannelCodec)
+                        return ((ChannelCodec)existing).getDataClass().getName();
+                    else
+                        return "<non-channel data>";
+                }
+                else
+                    return null;
+            }
+        }.registerCodecs(codecs);
         return codecManager;
     }
 
-    private void registerCodecs(Set<ChannelCodec> codecs,
-                                Consumer<ChannelCodec> registerCodec,
-                                Consumer<String> unregisterCodec,
-                                BiConsumer<Class, ChannelCodec> registerDefaultCodec,
-                                Consumer<Class> unregisterDefaultCodec)
+    private abstract static class CodecRegistrar
     {
-        codecs.forEach(codec -> {
-            final Class dataClass = codec.getDataClass();
-            if (isFinal(dataClass.getModifiers()))
-            {
-                unregisterDefaultCodec.accept(dataClass);
-                registerDefaultCodec.accept(dataClass, codec);
-            }
-            else
-            {
-                unregisterCodec.accept(codec.name());
-                registerCodec.accept(codec);
-            }
-        });
+        abstract void registerCodec(ChannelCodec codec, boolean isDefault);
+
+        abstract String getRegisteredCodecDataClassName(String codecName);
+
+        void registerCodecs(Set<ChannelCodec> codecs)
+        {
+            codecs.forEach(codec -> {
+                final Class dataClass = codec.getDataClass();
+                final String existingDataClassName = getRegisteredCodecDataClassName(codec.name());
+                if (existingDataClassName != null)
+                {
+                    if (!existingDataClassName.equals(dataClass.getName()))
+                        throw new IllegalStateException(format(
+                            "Codec already registered for name %s with different data %s",
+                            codec.name(), existingDataClassName));
+                    // Otherwise do nothing - we already have a codec for the right data class with the given name
+                }
+                else
+                {
+                    registerCodec(codec, isFinal(dataClass.getModifiers()));
+                }
+            });
+        }
     }
 
     @Provides EventBus eventBus(Vertx vertx)
