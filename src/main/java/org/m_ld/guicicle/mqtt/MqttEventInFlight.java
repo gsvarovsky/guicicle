@@ -22,6 +22,7 @@ class MqttEventInFlight<T>
     // Only sent messages have a reply handler
     final Handler<AsyncResult<Message>> replyHandler;
     final Handler<AsyncResult<Void>> producedHandler;
+    final long time = System.currentTimeMillis();
 
     MqttEventInFlight(T message, Handler<? extends AsyncResult<? extends Message>> replyHandler)
     {
@@ -48,6 +49,11 @@ class MqttEventInFlight<T>
     boolean isSend()
     {
         return messageId != null;
+    }
+
+    public long time()
+    {
+        return time;
     }
 
     @Override public String toString()

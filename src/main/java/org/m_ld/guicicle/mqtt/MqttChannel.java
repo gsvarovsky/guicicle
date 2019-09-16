@@ -7,13 +7,8 @@ package org.m_ld.guicicle.mqtt;
 
 import com.google.common.collect.Sets;
 import io.netty.handler.codec.mqtt.MqttQoS;
-import io.vertx.core.AsyncResult;
-import io.vertx.core.Handler;
-import io.vertx.core.MultiMap;
-import io.vertx.core.eventbus.DeliveryOptions;
-import io.vertx.core.eventbus.Message;
-import io.vertx.core.eventbus.MessageConsumer;
-import io.vertx.core.eventbus.MessageProducer;
+import io.vertx.core.*;
+import io.vertx.core.eventbus.*;
 import io.vertx.core.eventbus.impl.BodyReadStream;
 import io.vertx.core.streams.ReadStream;
 import io.vertx.mqtt.MqttException;
@@ -32,6 +27,8 @@ import java.util.concurrent.ArrayBlockingQueue;
 
 import static io.vertx.core.Future.failedFuture;
 import static io.vertx.core.Future.succeededFuture;
+import static io.vertx.core.Promise.promise;
+import static io.vertx.core.eventbus.ReplyFailure.NO_HANDLERS;
 import static java.lang.String.format;
 import static java.util.Arrays.asList;
 import static java.util.Collections.emptyList;
@@ -39,6 +36,7 @@ import static java.util.Collections.singletonList;
 import static java.util.Objects.requireNonNull;
 import static org.m_ld.guicicle.Handlers.Flag.SINGLE_INSTANCE;
 import static org.m_ld.guicicle.Handlers.Flag.SINGLE_USE;
+import static org.m_ld.guicicle.Vertice.when;
 import static org.m_ld.guicicle.mqtt.MqttDirectAddress.MqttReplyAddress.REPLY_ADDRESS;
 import static org.m_ld.guicicle.mqtt.MqttDirectAddress.MqttSendAddress.SEND_ADDRESS;
 import static org.m_ld.guicicle.mqtt.MqttTopicAddress.pattern;
@@ -129,30 +127,36 @@ class MqttChannel<T> extends AbstractChannel<T>
         public void close()
         {
             mqttEventClient.exceptionHandlers().remove(exceptionHandler);
-            endHandlers.handle(null);
+            endHandlers.handle(succeededFuture());
         }
     }
 
     abstract class MqttChannelWriter<M> extends MqttChannelStream implements MqttProducer
     {
+        /**
+         * This member is used for both enqueuing messages prior to connecting to the broker (with Object keys) and
+         * messages awaiting a PUBACK (with Integer keys). It is not used for messages awaiting a reply, see {@link
+         * MqttChannelReplier#repliesInFlight}.
+         */
         final Map<Object, MqttEventInFlight<M>> writesInFlight = new LinkedHashMap<>(options().getBufferSize());
         final MqttDirectAddress.MqttSendAddress sendAddress = SEND_ADDRESS.fromId(channelId()).topic(address());
         final Set<String> recentlySentTo = new HashSet<>();
 
         void write(MqttEventInFlight<M> wif, @Nullable DeliveryOptions options)
         {
-            final String address = wif.isSend() ? nextSendAddress(wif) : address();
-            if (address != null)
-                write(address, wif, options);
-            else if (qos(options) != MqttQoS.AT_MOST_ONCE)
-                produced(failedFuture(format("No suitable address found for %s", wif)), wif);
+            final Future<String> address = wif.isSend() ?
+                nextSendAddress(wif, options(options)) : succeededFuture(address());
+            address.setHandler(addressResult -> {
+                if (addressResult.succeeded())
+                    write(addressResult.result(), wif, options);
+                else if (qos(options) != MqttQoS.AT_MOST_ONCE)
+                    produced(addressResult.mapEmpty(), wif);
+            });
         }
 
         void write(String address, MqttEventInFlight<M> wif, @Nullable DeliveryOptions options)
         {
-            if (options == null)
-                options = options();
-
+            options = options(options);
             mqttEventClient
                 .publish(address, wif.message, qos(options), options)
                 .setHandler(published -> {
@@ -166,32 +170,55 @@ class MqttChannel<T> extends AbstractChannel<T>
                 });
         }
 
-        String nextSendAddress(MqttEventInFlight<M> wif)
+        Future<String> nextSendAddress(MqttEventInFlight<M> wif, DeliveryOptions options)
         {
-            final Set<String> present =
-                mqttEventClient.presence().orElseThrow(UnsupportedOperationException::new).present(address());
+            return nextSendAddress(wif).map(Future::succeededFuture).orElseGet(() -> {
+                // No-one present. Keep re-checking on every client tick, up to the timeout, then give up.
+                final Promise<String> promiseAddress = promise();
+                mqttEventClient.tickHandlers().add(new Handler<Long>()
+                {
+                    @Override public void handle(Long time)
+                    {
+                        if (time - wif.time() > options.getSendTimeout())
+                        {
+                            promiseAddress.fail(format("No suitable address found for %s", wif));
+                            if (wif.replyHandler != null)
+                                wif.replyHandler.handle(failedFuture(new ReplyException(NO_HANDLERS, format(
+                                    "No-one present on %s to send message to", MqttChannelWriter.this.address()))));
+                            stopRetrying();
+                        }
+                        else
+                        {
+                            nextSendAddress(wif).ifPresent(address -> {
+                                promiseAddress.complete(address);
+                                stopRetrying();
+                            });
+                        }
+                    }
+
+                    void stopRetrying()
+                    {
+                        mqttEventClient.tickHandlers().remove(this);
+                    }
+                });
+                return promiseAddress.future();
+            });
+        }
+
+        private Optional<String> nextSendAddress(MqttEventInFlight<M> wif)
+        {
+            final Set<String> present = mqttEventClient.presence()
+                .orElseThrow(UnsupportedOperationException::new).present(address());
             if (recentlySentTo.containsAll(present))
                 recentlySentTo.clear();
 
             if (!options().isEcho())
                 recentlySentTo.add(channelId());
 
-            final Optional<MqttDirectAddress.MqttSendAddress> sendAddress =
-                Sets.difference(present, recentlySentTo).stream().findAny().map(
-                    toId -> this.sendAddress.toId(toId).messageId(wif.messageId));
-
-            if (!sendAddress.isPresent())
-            {
-                if (wif.replyHandler != null)
-                    wif.replyHandler.handle(
-                        failedFuture(format("No-one present on %s to send message to", address())));
-            }
-            else
-            {
-                recentlySentTo.add(sendAddress.get().toId());
-            }
-
-            return sendAddress.map(MqttTopicAddress::toString).orElse(null);
+            return Sets.difference(present, recentlySentTo).stream().findAny().map(toId -> {
+                recentlySentTo.add(toId); // Side-effect of success
+                return sendAddress.toId(toId).messageId(wif.messageId).toString();
+            });
         }
 
         @Override public void onProduced(Integer id)
@@ -570,9 +597,12 @@ class MqttChannel<T> extends AbstractChannel<T>
 
         @Override public void close()
         {
-            super.close();
-            mqttEventClient.presence().ifPresent(presence -> presence.leave(channelId()));
-            unregister();
+            mqttEventClient.presence()
+                .map(presence -> when(presence::leave, channelId()))
+                .orElse(succeededFuture()).setHandler(v -> {
+                unregister();
+                super.close();
+            });
         }
     }
 }

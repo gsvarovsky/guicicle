@@ -5,6 +5,8 @@
 
 package org.m_ld.guicicle.mqtt;
 
+import com.google.common.base.Objects;
+
 import java.util.AbstractList;
 import java.util.Arrays;
 import java.util.Optional;
@@ -78,22 +80,16 @@ public abstract class MqttTopicAddress<T extends MqttTopicAddress<T>> extends Ab
         return i == j && j == names.length ? Optional.of(create(names)) : Optional.empty();
     }
 
-    public T substitute(String... substitutions)
-    {
-        final String[] names = Arrays.copyOf(parts, parts.length);
-        for (int i = 0, j = 0; i < parts.length && j < substitutions.length; i++)
-        {
-            if (parts[i].equals("#") || parts[i].equals("+"))
-                names[i] = substitutions[j++];
-        }
-        return create(names);
-    }
-
     public T substitute(int index, String name)
     {
-        final String[] names = Arrays.copyOf(parts, parts.length);
-        names[index] = name;
-        return create(names);
+        final String[] names = name.split("/");
+        if (names.length > 1 && index != parts.length - 1)
+            throw new IllegalArgumentException("Cannot substitute multiple names except at end");
+
+        final String[] newParts = Arrays.copyOf(parts, parts.length + names.length - 1);
+        for (String subName : names)
+            newParts[index++] = subName;
+        return create(newParts);
     }
 
     @Override public int size()
@@ -104,6 +100,16 @@ public abstract class MqttTopicAddress<T extends MqttTopicAddress<T>> extends Ab
     @Override public String get(int index)
     {
         return parts[index];
+    }
+
+    @Override public boolean equals(Object that)
+    {
+        return that instanceof MqttTopicAddress && Arrays.equals(parts, ((MqttTopicAddress<?>)that).parts);
+    }
+
+    @Override public int hashCode()
+    {
+        return Objects.hashCode(super.hashCode(), parts);
     }
 
     @Override public String toString()

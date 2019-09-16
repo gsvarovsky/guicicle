@@ -11,5 +11,12 @@ import io.vertx.core.Handler;
 public interface VertxCloseable
 {
     void addCloseHandler(Handler<AsyncResult<Void>> endHandler);
+
     void close();
+
+    default void close(Handler<AsyncResult<Void>> endHandler)
+    {
+        addCloseHandler(endHandler);
+        close();
+    }
 }

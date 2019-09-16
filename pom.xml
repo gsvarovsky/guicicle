@@ -11,7 +11,7 @@
 
     <groupId>org.m-ld</groupId>
     <artifactId>guicicle</artifactId>
-    <version>0.1.5</version>
+    <version>0.1.6</version>
 
     <properties>
         <guice.version>4.2.2</guice.version>
@@ -22,13 +22,7 @@
     <repositories>
         <repository>
             <id>bintray</id>
-            <url>https://jcenter.bintray.com</url>
-            <releases>
-                <enabled>true</enabled>
-            </releases>
-            <snapshots>
-                <enabled>false</enabled>
-            </snapshots>
+            <url>https://dl.bintray.com/j-n-k/moquette</url>
         </repository>
     </repositories>
 
@@ -96,9 +90,10 @@
             <scope>test</scope>
         </dependency>
         <dependency>
-            <groupId>io.moquette</groupId>
+            <!-- TODO: Switch back to moquette master when a release >0.12 appears -->
+            <groupId>com.github.j-n-k</groupId>
             <artifactId>moquette-broker</artifactId>
-            <version>0.12.1</version>
+            <version>0.13.0.OH2</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

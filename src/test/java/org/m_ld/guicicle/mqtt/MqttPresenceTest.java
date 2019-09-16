@@ -57,12 +57,12 @@ import static org.mockito.Mockito.*;
 
     @Test public void testLeave()
     {
-        new MqttPresence(mqtt, "domain").leave("channel1");
+        new MqttPresence(mqtt, "domain").leave("channel1", v -> {});
         verify(mqtt).publish(eq("__presence/domain/client1/channel1"),
                              eq(Buffer.buffer("-")),
                              eq(MqttQoS.AT_MOST_ONCE),
                              eq(false),
-                             eq(true),
+                             eq(false), // No retention for leave
                              any());
     }
 

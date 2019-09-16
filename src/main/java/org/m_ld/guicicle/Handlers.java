@@ -37,7 +37,7 @@ public class Handlers<T> extends AbstractCollection<Handler<T>> implements Handl
 
     @Override public void handle(T event)
     {
-        handlers.forEach(h -> h.handle(event));
+        new ArrayList<>(handlers).forEach(h -> h.handle(event));
         if (flags.contains(SINGLE_USE))
             handlers.clear();
     }

@@ -10,6 +10,8 @@ import io.vertx.core.eventbus.MessageCodec;
 
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static java.lang.reflect.Modifier.isFinal;
+
 public abstract class ChannelCodec<T> implements MessageCodec<T, T>
 {
     protected final Class<T> dataClass;
@@ -50,5 +52,10 @@ public abstract class ChannelCodec<T> implements MessageCodec<T, T>
     public Class<T> getDataClass()
     {
         return dataClass;
+    }
+
+    public boolean isDefault()
+    {
+        return isFinal(dataClass.getModifiers());
     }
 }

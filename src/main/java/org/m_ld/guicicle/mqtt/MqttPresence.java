@@ -7,7 +7,6 @@ package org.m_ld.guicicle.mqtt;
 
 import io.netty.handler.codec.mqtt.MqttQoS;
 import io.vertx.core.AsyncResult;
-import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.mqtt.MqttClient;
@@ -16,34 +15,41 @@ import org.jetbrains.annotations.NotNull;
 import org.m_ld.guicicle.Handlers;
 
 import java.util.*;
+import java.util.logging.Logger;
 
 import static io.netty.handler.codec.mqtt.MqttQoS.AT_LEAST_ONCE;
 import static io.netty.handler.codec.mqtt.MqttQoS.AT_MOST_ONCE;
 import static io.vertx.core.Future.succeededFuture;
+import static java.lang.String.format;
 import static java.util.Collections.singletonList;
 import static java.util.stream.Collectors.toSet;
 import static org.m_ld.guicicle.Handlers.Flag.SINGLE_USE;
 import static org.m_ld.guicicle.mqtt.MqttConsumer.subscription;
 import static org.m_ld.guicicle.mqtt.MqttTopicAddress.pattern;
 
+/**
+ * Per https://github.com/mqtt/mqtt.github.io/wiki/presence
+ */
 public class MqttPresence implements MqttConsumer, MqttProducer
 {
+    private static final Logger LOG = Logger.getLogger(MqttPresence.class.getName());
+
     private static class PresenceAddress extends MqttTopicAddress<PresenceAddress>
     {
-        private final String clientId, channelId;
+        private final String clientId, consumerId;
 
         PresenceAddress()
         {
             super("__presence/+/#");
             this.clientId = "";
-            this.channelId = null;
+            this.consumerId = null;
         }
 
         PresenceAddress(String[] parts)
         {
             super(parts);
             this.clientId = parts[2];
-            this.channelId = parts.length > 3 ? parts[3] : null;
+            this.consumerId = parts.length > 3 ? parts[3] : null;
         }
 
         PresenceAddress domain(String domain)
@@ -56,9 +62,9 @@ public class MqttPresence implements MqttConsumer, MqttProducer
             return clientId;
         }
 
-        Optional<String> channelId()
+        Optional<String> consumerId()
         {
-            return Optional.ofNullable(channelId);
+            return Optional.ofNullable(consumerId);
         }
 
         PresenceAddress withIds(String clientId, String channelId)
@@ -88,7 +94,7 @@ public class MqttPresence implements MqttConsumer, MqttProducer
 
     void join(String consumerId, String address, Handler<AsyncResult<Void>> handleResult)
     {
-        setStatus(consumerId, address, AT_LEAST_ONCE).setHandler(msgIdResult -> {
+        setStatus(consumerId, address, AT_LEAST_ONCE, msgIdResult -> {
             if (msgIdResult.succeeded())
                 joinHandlers.put(msgIdResult.result(), handleResult);
             else
@@ -96,9 +102,9 @@ public class MqttPresence implements MqttConsumer, MqttProducer
         });
     }
 
-    void leave(String consumerId)
+    void leave(String consumerId, Handler<AsyncResult<Void>> handleResult)
     {
-        setStatus(consumerId, DISCONNECTED, AT_MOST_ONCE);
+        setStatus(consumerId, DISCONNECTED, AT_MOST_ONCE, i -> handleResult.handle(i.mapEmpty()));
     }
 
     @NotNull Set<String> present(String address)
@@ -112,7 +118,7 @@ public class MqttPresence implements MqttConsumer, MqttProducer
 
     @Override public List<Subscription> subscriptions()
     {
-        return singletonList(subscription(baseAddress.toString(), AT_MOST_ONCE));
+        return singletonList(subscription(baseAddress.toString(), AT_LEAST_ONCE));
     }
 
     @Override public void onMessage(MqttPublishMessage msg)
@@ -121,23 +127,27 @@ public class MqttPresence implements MqttConsumer, MqttProducer
             final String address = msg.payload().toString();
             if (DISCONNECTED.equals(address))
             {
-                if (presence.channelId().isPresent() && present.containsKey(presence.clientId()))
+                if (presence.consumerId().isPresent() && present.containsKey(presence.clientId()))
                 {
-                    // One consumer has disconnected
+                    LOG.fine(format("%s: Client %s consumer %s disconnected",
+                                    mqtt.clientId(), presence.clientId(), presence.consumerId().get()));
                     final Set<String> channelIds = present.get(presence.clientId()).keySet();
-                    if (channelIds.remove(presence.channelId().get()) && channelIds.isEmpty())
+                    if (channelIds.remove(presence.consumerId().get()) && channelIds.isEmpty())
                         present.remove(presence.clientId());
                 }
-                else if (!presence.channelId().isPresent())
+                else if (!presence.consumerId().isPresent())
                 {
                     // A whole client has disconnected
+                    LOG.fine(format("%s: Client %s disconnected", mqtt.clientId(), presence.clientId()));
                     present.remove(presence.clientId());
                 }
             }
-            else if (presence.channelId().isPresent())
+            else if (presence.consumerId().isPresent())
             {
+                LOG.fine(format("%s: Client %s consumer %s present on %s",
+                                mqtt.clientId(), presence.clientId(), presence.consumerId().get(), address));
                 present.computeIfAbsent(
-                    presence.clientId(), cid -> new HashMap<>()).put(presence.channelId().get(), pattern(address));
+                    presence.clientId(), cid -> new HashMap<>()).put(presence.consumerId().get(), pattern(address));
             }
         });
     }
@@ -157,14 +167,20 @@ public class MqttPresence implements MqttConsumer, MqttProducer
     @Override public void close()
     {
         mqtt.unsubscribe(baseAddress.toString());
-        closeHandlers.handle(null);
+        closeHandlers.handle(succeededFuture());
     }
 
-    private Future<Integer> setStatus(String consumerId, String address, MqttQoS qos)
+    private void setStatus(String consumerId, String address, MqttQoS qos, Handler<AsyncResult<Integer>> handleResult)
     {
-        final Future<Integer> packetSent = Future.future();
+        LOG.info(format("%s: Local consumer %s setting presence %s", mqtt.clientId(), consumerId, address));
+
+        // Retain presence (but not absence) for new clients
+        final boolean isRetain = !DISCONNECTED.equals(address);
         mqtt.publish(baseAddress.withIds(mqtt.clientId(), consumerId).toString(),
-                     Buffer.buffer(address), qos, false, true, packetSent); // Retain for new clients
-        return packetSent;
+                     Buffer.buffer(address),
+                     qos,
+                     false,
+                     isRetain,
+                     handleResult);
     }
 }

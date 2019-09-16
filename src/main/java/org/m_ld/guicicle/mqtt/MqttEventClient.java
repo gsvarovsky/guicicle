@@ -34,4 +34,6 @@ public interface MqttEventClient
     Object decodeFromWire(MqttPublishMessage message, MultiMap headers);
 
     Optional<MqttPresence> presence();
+
+    Handlers<Long> tickHandlers();
 }

@@ -66,4 +66,10 @@ public class JacksonCodec<T> extends ChannelCodec<T>
             throw new RuntimeException(e);
         }
     }
+
+    @Override public boolean isDefault()
+    {
+        // If using a TypeReference, this can't be a default codec
+        return super.isDefault() && dataType == null;
+    }
 }

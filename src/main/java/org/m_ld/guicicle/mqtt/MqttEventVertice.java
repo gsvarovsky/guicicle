@@ -11,13 +11,17 @@ import io.netty.handler.codec.mqtt.MqttQoS;
 import io.vertx.core.CompositeFuture;
 import io.vertx.core.Future;
 import io.vertx.core.MultiMap;
+import io.vertx.core.Promise;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.eventbus.DeliveryOptions;
 import io.vertx.mqtt.MqttClient;
 import io.vertx.mqtt.MqttClientOptions;
 import io.vertx.mqtt.messages.MqttPublishMessage;
 import org.m_ld.guicicle.Handlers;
+import org.m_ld.guicicle.TimerProvider;
+import org.m_ld.guicicle.TimerProvider.Periodic;
 import org.m_ld.guicicle.Vertice;
+import org.m_ld.guicicle.VertxCloseable;
 import org.m_ld.guicicle.channel.Channel;
 import org.m_ld.guicicle.channel.ChannelOptions;
 import org.m_ld.guicicle.channel.ChannelOptions.Delivery;
@@ -25,13 +29,16 @@ import org.m_ld.guicicle.channel.ChannelProvider;
 
 import java.util.*;
 
-import static io.vertx.core.Future.future;
 import static io.vertx.core.Future.succeededFuture;
+import static java.lang.System.currentTimeMillis;
 import static java.util.Collections.singleton;
+import static java.util.concurrent.TimeUnit.SECONDS;
 import static java.util.stream.Collectors.toList;
 
 /**
- * TODO: Timeout
+ * Channel provider using MQTT.
+ * <p>
+ * Supports {@link ChannelOptions.Quality}, publish and send (using {@link MqttPresence}) and delivery timeouts.
  */
 public class MqttEventVertice implements ChannelProvider, Vertice, MqttEventClient
 {
@@ -54,12 +61,31 @@ public class MqttEventVertice implements ChannelProvider, Vertice, MqttEventClie
     private final List<MqttProducer> producers = new ArrayList<>();
     // Mqtt exception handling is global. Best we can do is provide for multiple handlers.
     private final Handlers<Throwable> exceptionHandlers = new Handlers<>();
+    private final TickHandlers tickHandlers;
     private MqttPresence presence = null;
 
-    @Inject public MqttEventVertice(MqttClient mqtt, MqttEventCodec eventCodec)
+    private static class TickHandlers extends Handlers<Long>
+    {
+        final TimerProvider timerProvider;
+        final long timerId;
+
+        TickHandlers(TimerProvider timerProvider, long duration)
+        {
+            this.timerProvider = timerProvider;
+            this.timerId = timerProvider.setTimer(duration, id -> handle(currentTimeMillis()));
+        }
+
+        void cancel()
+        {
+            timerProvider.cancelTimer(timerId);
+        }
+    }
+
+    @Inject public MqttEventVertice(MqttClient mqtt, MqttEventCodec eventCodec, @Periodic TimerProvider timerProvider)
     {
         this.mqtt = mqtt;
         this.eventCodec = eventCodec;
+        this.tickHandlers = new TickHandlers(timerProvider, SECONDS.toMillis(1));
     }
 
     @Inject(optional = true) public void setPort(@Named("config.mqtt.port") int port)
@@ -106,11 +132,13 @@ public class MqttEventVertice implements ChannelProvider, Vertice, MqttEventClie
 
     @Override public void stop(Future<Void> stopFuture)
     {
-        mqtt.disconnect(result -> {
-            new ArrayList<>(consumers).forEach(MqttConsumer::close);
-            new ArrayList<>(producers).forEach(MqttProducer::close);
-            stopFuture.handle(result.mapEmpty());
-        });
+        tickHandlers.cancel();
+        final ArrayList<VertxCloseable> closeables = new ArrayList<>(producers);
+        closeables.addAll(consumers);
+        CompositeFuture.all(closeables.stream().map(
+            closeable -> Vertice.<Void>when(closeable::close)).collect(toList()))
+            .compose(allClosed -> Vertice.<Void>when(mqtt::disconnect))
+            .setHandler(stopFuture);
     }
 
     @Override public <T> Channel<T> channel(String address, ChannelOptions options)
@@ -158,19 +186,16 @@ public class MqttEventVertice implements ChannelProvider, Vertice, MqttEventClie
         }
         else
         {
-            final Future<Integer> publishSent = future();
+            final Promise<Integer> publishSent = Promise.promise();
             mqtt.publish(topic, buffer, qos, false, false, publishSent);
-            return publishSent;
+            return publishSent.future();
         }
     }
 
     @Override public CompositeFuture unsubscribe(MqttConsumer consumer)
     {
-        return CompositeFuture.all(consumer.subscriptions().stream().map(sub -> {
-            final Future<Integer> future = Future.future();
-            mqtt.unsubscribe(sub.topic(), future);
-            return future;
-        }).collect(toList()));
+        return CompositeFuture.all(consumer.subscriptions().stream().map(
+            sub -> Vertice.<String, Integer>when(mqtt::unsubscribe, sub.topic())).collect(toList()));
     }
 
     @Override public Object decodeFromWire(MqttPublishMessage message, MultiMap headers)
@@ -185,6 +210,11 @@ public class MqttEventVertice implements ChannelProvider, Vertice, MqttEventClie
     @Override public Optional<MqttPresence> presence()
     {
         return Optional.ofNullable(presence);
+    }
+
+    @Override public Handlers<Long> tickHandlers()
+    {
+        return tickHandlers;
     }
 
     @Override public boolean isConnected()

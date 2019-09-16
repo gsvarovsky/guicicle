@@ -45,6 +45,11 @@ public abstract class AbstractChannel<T> implements Channel<T>
         return new ChannelOptions(options);
     }
 
+    public DeliveryOptions options(DeliveryOptions override)
+    {
+        return override == null ? options() : override;
+    }
+
     @Override public void close()
     {
         if (consumer != null)

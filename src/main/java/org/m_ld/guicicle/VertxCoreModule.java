@@ -9,6 +9,7 @@ import com.google.inject.AbstractModule;
 import com.google.inject.Provides;
 import com.google.inject.Singleton;
 import com.google.inject.multibindings.ProvidesIntoSet;
+import io.vertx.core.Handler;
 import io.vertx.core.Vertx;
 import io.vertx.core.eventbus.EventBus;
 import io.vertx.core.eventbus.MessageCodec;
@@ -16,6 +17,8 @@ import io.vertx.core.eventbus.impl.CodecManager;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.core.shareddata.LocalMap;
+import org.m_ld.guicicle.TimerProvider.OneShot;
+import org.m_ld.guicicle.TimerProvider.Periodic;
 import org.m_ld.guicicle.channel.*;
 import org.m_ld.guicicle.channel.ChannelProvider.Local;
 import org.m_ld.guicicle.web.ResponseStatusMapper;
@@ -30,7 +33,6 @@ import static com.google.common.collect.Maps.immutableEntry;
 import static com.google.inject.multibindings.Multibinder.newSetBinder;
 import static com.google.inject.name.Names.named;
 import static java.lang.String.format;
-import static java.lang.reflect.Modifier.isFinal;
 import static java.util.Collections.singletonList;
 import static java.util.stream.Collectors.toMap;
 
@@ -101,9 +103,9 @@ public class VertxCoreModule extends AbstractModule
         final LocalMap<String, String> regCodecs = vertx.sharedData().getLocalMap("guicicle.codecs");
         new CodecRegistrar()
         {
-            @Override void registerCodec(ChannelCodec codec, boolean isDefault)
+            @Override void registerCodec(ChannelCodec codec)
             {
-                if (isDefault)
+                if (codec.isDefault())
                     //noinspection unchecked
                     vertx.eventBus().registerDefaultCodec(codec.getDataClass(), codec);
                 else
@@ -125,9 +127,9 @@ public class VertxCoreModule extends AbstractModule
         final CodecManager codecManager = new CodecManager();
         new CodecRegistrar()
         {
-            @Override void registerCodec(ChannelCodec codec, boolean isDefault)
+            @Override void registerCodec(ChannelCodec codec)
             {
-                if (isDefault)
+                if (codec.isDefault())
                     //noinspection unchecked
                     codecManager.registerDefaultCodec(codec.getDataClass(), codec);
                 else
@@ -153,7 +155,7 @@ public class VertxCoreModule extends AbstractModule
 
     private abstract static class CodecRegistrar
     {
-        abstract void registerCodec(ChannelCodec codec, boolean isDefault);
+        abstract void registerCodec(ChannelCodec codec);
 
         abstract String getRegisteredCodecDataClassName(String codecName);
 
@@ -172,7 +174,7 @@ public class VertxCoreModule extends AbstractModule
                 }
                 else
                 {
-                    registerCodec(codec, isFinal(dataClass.getModifiers()));
+                    registerCodec(codec);
                 }
             });
         }
@@ -203,6 +205,38 @@ public class VertxCoreModule extends AbstractModule
             if (result.failed())
                 vertx.exceptionHandler().handle(result.cause());
         });
+    }
+
+    @Provides @Periodic TimerProvider periodicTimerProvider(Vertx vertx)
+    {
+        return new TimerProvider()
+        {
+            @Override public long setTimer(long delay, Handler<Long> handler)
+            {
+                return vertx.setPeriodic(delay, handler);
+            }
+
+            @Override public boolean cancelTimer(long id)
+            {
+                return vertx.cancelTimer(id);
+            }
+        };
+    }
+
+    @Provides @OneShot TimerProvider oneShotTimerProvider(Vertx vertx)
+    {
+        return new TimerProvider()
+        {
+            @Override public long setTimer(long delay, Handler<Long> handler)
+            {
+                return vertx.setTimer(delay, handler);
+            }
+
+            @Override public boolean cancelTimer(long id)
+            {
+                return vertx.cancelTimer(id);
+            }
+        };
     }
 
     @ProvidesIntoSet ChannelCodec uuidCodec()

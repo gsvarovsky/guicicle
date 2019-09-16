@@ -63,9 +63,15 @@ public class MqttTopicAddressTest
     @Test
     public void testSubtitution()
     {
-        assertEquals("any/thing", pattern("any/+").substitute("thing").toString());
-        assertEquals("any/thing", pattern("any/#").substitute("thing").toString());
-        assertEquals("any/th/ing", pattern("any/+/ing").substitute("th").toString());
-        assertEquals("any/th/ing", pattern("any/#").substitute("th/ing").toString());
+        assertEquals(pattern("any/thing"), pattern("any/+").substitute(1, "thing"));
+        assertEquals(pattern("any/thing"), pattern("any/#").substitute(1, "thing"));
+        assertEquals(pattern("any/th/ing"), pattern("any/+/ing").substitute(1, "th"));
+        assertEquals(pattern("any/th/ing"), pattern("any/#").substitute(1, "th/ing"));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testNonTerminalMultipleSubstitute()
+    {
+        pattern("any/+/foo").substitute(1, "th/ing");
     }
 }

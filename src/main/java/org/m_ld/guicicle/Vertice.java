@@ -5,10 +5,7 @@
 
 package org.m_ld.guicicle;
 
-import io.vertx.core.AsyncResult;
-import io.vertx.core.Future;
-import io.vertx.core.Handler;
-import io.vertx.core.Vertx;
+import io.vertx.core.*;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -38,6 +35,7 @@ public interface Vertice
     default void start(Future<Void> startFuture)
     {
         start();
+        //noinspection deprecation
         startFuture.complete();
     }
 
@@ -53,6 +51,7 @@ public interface Vertice
     default void stop(Future<Void> stopFuture)
     {
         stop();
+        //noinspection deprecation
         stopFuture.complete();
     }
 
@@ -86,7 +85,7 @@ public interface Vertice
      */
     static <T> Future<T> when(Consumer<Handler<AsyncResult<T>>> fluentApi)
     {
-        final Future<T> future = Future.future();
+        final Future<T> future = Promise.<T>promise().future();
         fluentApi.accept(future);
         return future;
     }
@@ -103,7 +102,7 @@ public interface Vertice
      */
     static <P, T> Future<T> when(BiConsumer<P, Handler<AsyncResult<T>>> fluentApi, P param)
     {
-        final Future<T> future = Future.future();
+        final Future<T> future = Promise.<T>promise().future();
         fluentApi.accept(param, future);
         return future;
     }
@@ -139,13 +138,13 @@ public interface Vertice
      */
     static <T> Future<T> toFuture(CompletionStage<T> stage, Vertx vertx)
     {
-        final Future<T> future = Future.future();
+        final Promise<T> promise = Promise.promise();
         stage.whenComplete((value, error) -> vertx.runOnContext(v -> {
             if (error == null)
-                future.complete(value);
+                promise.complete(value);
             else
-                future.fail(error);
+                promise.fail(error);
         }));
-        return future;
+        return promise.future();
     }
 }
