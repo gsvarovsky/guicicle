@@ -36,7 +36,7 @@ import java.util.function.Consumer;
 import static java.util.Collections.singletonList;
 
 @RunWith(VertxUnitRunner.class)
-public abstract class VertxMqttTest
+public abstract class VertxMqttWithBrokerTest
 {
     @ClassRule public static RunTestOnContext rule = new RunTestOnContext();
     private static Server mqttBroker;

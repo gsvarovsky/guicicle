@@ -5,17 +5,12 @@
 
 package org.m_ld.guicicle.mqtt;
 
-import io.netty.handler.codec.mqtt.MqttQoS;
 import io.vertx.core.AsyncResult;
-import io.vertx.core.Handler;
 import io.vertx.core.buffer.Buffer;
-import io.vertx.mqtt.MqttClient;
 import io.vertx.mqtt.messages.MqttPublishMessage;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.ArgumentCaptor;
-import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnitRunner;
 
@@ -24,54 +19,81 @@ import java.util.concurrent.atomic.AtomicReference;
 import static io.vertx.core.Future.succeededFuture;
 import static java.util.Collections.emptySet;
 import static java.util.Collections.singleton;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.*;
+import static org.m_ld.guicicle.channel.ChannelOptions.Quality.AT_LEAST_ONCE;
+import static org.m_ld.guicicle.channel.ChannelOptions.Quality.AT_MOST_ONCE;
 import static org.mockito.Mockito.*;
 
 @RunWith(MockitoJUnitRunner.class) public class MqttPresenceTest
 {
-    @Mock MqttClient mqtt;
-    @Captor ArgumentCaptor<Handler<AsyncResult<Integer>>> sendHandlerCapture;
+    @Mock MqttEventClient mqtt;
+    MqttPresence presence;
 
-    @Before
-    public void setUp()
+    @Before public void setUp()
     {
         when(mqtt.clientId()).thenReturn("client1");
+        presence = new MqttPresence(mqtt, "domain");
+        presence.onSubscribe(succeededFuture());
+    }
+
+    @Test
+    public void testShutdownUnsubscribes()
+    {
+        final AtomicReference<AsyncResult<Void>> closed = new AtomicReference<>();
+        presence.close(closed::set);
+        assertNull(closed.get());
+        verify(mqtt).unsubscribe(presence);
+        presence.onUnsubscribe(succeededFuture());
+        assertTrue(closed.get().succeeded());
     }
 
     @Test public void testJoin()
     {
         final AtomicReference<AsyncResult<Void>> joined = new AtomicReference<>();
-        final MqttPresence presence = new MqttPresence(mqtt, "domain");
+        when(mqtt.publish("__presence/domain/client1/channel1",
+                          Buffer.buffer("address"),
+                          AT_LEAST_ONCE,
+                          false,
+                          true)).thenReturn(succeededFuture(1));
         presence.join("channel1", "address", joined::set);
-        verify(mqtt).publish(eq("__presence/domain/client1/channel1"),
-                             eq(Buffer.buffer("address")),
-                             eq(MqttQoS.AT_LEAST_ONCE),
-                             eq(false),
-                             eq(true),
-                             sendHandlerCapture.capture());
-        sendHandlerCapture.getValue().handle(succeededFuture(1));
-        presence.onProduced(1);
+        presence.onPublished(1);
+        assertTrue(joined.get().succeeded());
+    }
+
+    @Test public void testJoinBeforeSubscribe()
+    {
+        presence = new MqttPresence(mqtt, "domain");
+        final AtomicReference<AsyncResult<Void>> joined = new AtomicReference<>();
+        presence.join("channel1", "address", joined::set);
+        assertNull(joined.get());
+
+        when(mqtt.publish("__presence/domain/client1/channel1",
+                          Buffer.buffer("address"),
+                          AT_LEAST_ONCE,
+                          false,
+                          true)).thenReturn(succeededFuture(1));
+        presence.onSubscribe(succeededFuture());
+        presence.onPublished(1);
         assertTrue(joined.get().succeeded());
     }
 
     @Test public void testLeave()
     {
-        new MqttPresence(mqtt, "domain").leave("channel1", v -> {});
-        verify(mqtt).publish(eq("__presence/domain/client1/channel1"),
-                             eq(Buffer.buffer("-")),
-                             eq(MqttQoS.AT_MOST_ONCE),
-                             eq(false),
-                             eq(false), // No retention for leave
-                             any());
+        final AtomicReference<AsyncResult<Void>> left = new AtomicReference<>();
+        when(mqtt.publish("__presence/domain/client1/channel1",
+                          Buffer.buffer("-"),
+                          AT_MOST_ONCE,
+                          false,
+                          false)).thenReturn(succeededFuture());
+        presence.leave("channel1", left::set);
+        assertTrue(left.get().succeeded());
     }
 
-    @Test public void testNoConsumeRandomMessage()
+    @Test(expected = IllegalArgumentException.class) public void testNoConsumeRandomMessage()
     {
         final MqttPublishMessage msg = mock(MqttPublishMessage.class);
         when(msg.topicName()).thenReturn("random/stuff");
-        final MqttPresence presence = new MqttPresence(mqtt, "domain");
-        presence.onMessage(msg);
+        presence.onMessage(msg, presence.subscriptions()[0]);
     }
 
     @Test public void testConsumeConsumerConnectedMessage()
@@ -79,8 +101,7 @@ import static org.mockito.Mockito.*;
         final MqttPublishMessage msg = mock(MqttPublishMessage.class);
         when(msg.topicName()).thenReturn("__presence/domain/client1/channel1");
         when(msg.payload()).thenReturn(Buffer.buffer("address"));
-        final MqttPresence presence = new MqttPresence(mqtt, "domain");
-        presence.onMessage(msg);
+        presence.onMessage(msg, presence.subscriptions()[0]);
         assertEquals(singleton("channel1"), presence.present("address"));
     }
 
@@ -89,8 +110,7 @@ import static org.mockito.Mockito.*;
         final MqttPublishMessage msg = mock(MqttPublishMessage.class);
         when(msg.topicName()).thenReturn("__presence/domain/client1/channel1");
         when(msg.payload()).thenReturn(Buffer.buffer("#"));
-        final MqttPresence presence = new MqttPresence(mqtt, "domain");
-        presence.onMessage(msg);
+        presence.onMessage(msg, presence.subscriptions()[0]);
         assertEquals(singleton("channel1"), presence.present("address"));
     }
 
@@ -99,8 +119,7 @@ import static org.mockito.Mockito.*;
         final MqttPublishMessage msg = mock(MqttPublishMessage.class);
         when(msg.topicName()).thenReturn("__presence/domain/client1/channel1");
         when(msg.payload()).thenReturn(Buffer.buffer("-"));
-        final MqttPresence presence = new MqttPresence(mqtt, "domain");
-        presence.onMessage(msg);
+        presence.onMessage(msg, presence.subscriptions()[0]);
         assertEquals(emptySet(), presence.present("address"));
     }
 
@@ -111,9 +130,8 @@ import static org.mockito.Mockito.*;
         when(msg1.payload()).thenReturn(Buffer.buffer("address"));
         when(msg2.topicName()).thenReturn("__presence/domain/client1/channel1");
         when(msg2.payload()).thenReturn(Buffer.buffer("-"));
-        final MqttPresence presence = new MqttPresence(mqtt, "domain");
-        presence.onMessage(msg1);
-        presence.onMessage(msg2);
+        presence.onMessage(msg1, presence.subscriptions()[0]);
+        presence.onMessage(msg2, presence.subscriptions()[0]);
         assertEquals(emptySet(), presence.present("address"));
     }
 
@@ -124,9 +142,8 @@ import static org.mockito.Mockito.*;
         when(msg1.payload()).thenReturn(Buffer.buffer("address"));
         when(msg2.topicName()).thenReturn("__presence/domain/client1");
         when(msg2.payload()).thenReturn(Buffer.buffer("-"));
-        final MqttPresence presence = new MqttPresence(mqtt, "domain");
-        presence.onMessage(msg1);
-        presence.onMessage(msg2);
+        presence.onMessage(msg1, presence.subscriptions()[0]);
+        presence.onMessage(msg2, presence.subscriptions()[0]);
         assertEquals(emptySet(), presence.present("address"));
     }
 }

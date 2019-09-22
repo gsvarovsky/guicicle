@@ -10,8 +10,8 @@ public abstract class MqttDirectAddress<T extends MqttDirectAddress<T>> extends 
     private MqttDirectAddress(String pattern)
     {
         super(pattern);
-        if (!"+".equals(get(1)) || !"+".equals(get(2)) || !"+".equals(get(3)))
-            throw new AssertionError("Expecting three wildcards");
+        if (size() < 5)
+            throw new AssertionError("Expecting five or more elements");
     }
 
     public String toId()
@@ -53,6 +53,11 @@ public abstract class MqttDirectAddress<T extends MqttDirectAddress<T>> extends 
     {
         public static MqttSendAddress SEND_ADDRESS = new MqttSendAddress();
 
+        public MqttSendAddress(String address)
+        {
+            super(address);
+        }
+
         private MqttSendAddress()
         {
             super("__send/+/+/+/#");
@@ -77,6 +82,11 @@ public abstract class MqttDirectAddress<T extends MqttDirectAddress<T>> extends 
     public static class MqttReplyAddress extends MqttDirectAddress<MqttReplyAddress>
     {
         public static MqttReplyAddress REPLY_ADDRESS = new MqttReplyAddress();
+
+        public MqttReplyAddress(String address)
+        {
+            super(address);
+        }
 
         private MqttReplyAddress()
         {

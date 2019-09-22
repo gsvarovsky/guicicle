@@ -41,10 +41,15 @@ public abstract class MqttTopicAddress<T extends MqttTopicAddress<T>> extends Ab
         return new BasicMqttTopicAddress(pattern);
     }
 
+    protected abstract T create(String[] parts);
+
     protected MqttTopicAddress(String pattern)
     {
-        parts = pattern.split("/");
+        this(pattern.split("/"));
+    }
 
+    protected MqttTopicAddress(String[] parts)
+    {
         if (parts.length == 0)
             throw new IllegalArgumentException("Empty pattern");
 
@@ -53,12 +58,7 @@ public abstract class MqttTopicAddress<T extends MqttTopicAddress<T>> extends Ab
 
         if (asList(parts).subList(0, parts.length - 1).indexOf("#") > -1)
             throw new IllegalArgumentException("Terminal wildcard not terminal");
-    }
 
-    protected abstract T create(String[] parts);
-
-    protected MqttTopicAddress(String[] parts)
-    {
         this.parts = parts;
     }
 

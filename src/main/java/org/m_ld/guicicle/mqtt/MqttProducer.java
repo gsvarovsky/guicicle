@@ -9,7 +9,7 @@ import org.m_ld.guicicle.VertxCloseable;
 
 public interface MqttProducer extends VertxCloseable
 {
-    void onProduced(Integer id);
+    void onPublished(Integer id);
 
     default void onConnected() {}
 }

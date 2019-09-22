@@ -5,46 +5,43 @@
 
 package org.m_ld.guicicle.mqtt;
 
-import io.netty.handler.codec.mqtt.MqttQoS;
 import io.vertx.core.AsyncResult;
 import io.vertx.mqtt.messages.MqttPublishMessage;
-import io.vertx.mqtt.messages.MqttSubAckMessage;
 import org.m_ld.guicicle.VertxCloseable;
-
-import java.util.List;
+import org.m_ld.guicicle.channel.ChannelOptions;
 
 public interface MqttConsumer extends VertxCloseable
 {
-    interface Subscription
+    class Subscription
     {
-        String topic();
+        final MqttTopicAddress address;
+        final ChannelOptions.Quality qos;
+        /**
+         * AsyncResults go null --> succeeded(Integer) --> succeeded(null)
+         */
+        AsyncResult<Integer> subscribed = null, unsubscribed = null;
+        int qosIndex = -1;
 
-        MqttQoS qos();
-    }
-
-    static Subscription subscription(String topic, MqttQoS qos)
-    {
-        return new Subscription()
+        Subscription(MqttTopicAddress address, ChannelOptions.Quality qos)
         {
-            @Override public String topic()
-            {
-                return topic;
-            }
+            this.address = address;
+            this.qos = qos;
+        }
 
-            @Override public MqttQoS qos()
-            {
-                return qos;
-            }
-        };
+        static boolean isComplete(AsyncResult<Integer> state)
+        {
+            return state != null && state.result() == null;
+        }
     }
 
-    List<Subscription> subscriptions();
+    /**
+     * Returned array should be const over the consumer's lifetime
+     */
+    Subscription[] subscriptions();
 
-    void onMessage(MqttPublishMessage message);
+    void onMessage(MqttPublishMessage message, Subscription subscription);
 
-    default void onSubscribeSent(AsyncResult<Integer> subscribeSendResult, int qosIndex) {}
+    void onSubscribe(AsyncResult<Void> subscribeResult);
 
-    default void onSubscribeAck(MqttSubAckMessage subAckMessage) {}
-
-    default void onUnsubscribeAck(int messageId) {}
+    void onUnsubscribe(AsyncResult<Void> unsubscribeResult);
 }

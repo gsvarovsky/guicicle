@@ -5,26 +5,28 @@
 
 package org.m_ld.guicicle.mqtt;
 
-import io.netty.handler.codec.mqtt.MqttQoS;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Handler;
-import io.vertx.core.buffer.Buffer;
-import io.vertx.mqtt.MqttClient;
+import io.vertx.core.Promise;
 import io.vertx.mqtt.messages.MqttPublishMessage;
 import org.jetbrains.annotations.NotNull;
 import org.m_ld.guicicle.Handlers;
+import org.m_ld.guicicle.channel.ChannelOptions;
 
-import java.util.*;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.logging.Logger;
 
-import static io.netty.handler.codec.mqtt.MqttQoS.AT_LEAST_ONCE;
-import static io.netty.handler.codec.mqtt.MqttQoS.AT_MOST_ONCE;
 import static io.vertx.core.Future.succeededFuture;
+import static io.vertx.core.Promise.promise;
+import static io.vertx.core.buffer.Buffer.buffer;
 import static java.lang.String.format;
-import static java.util.Collections.singletonList;
 import static java.util.stream.Collectors.toSet;
 import static org.m_ld.guicicle.Handlers.Flag.SINGLE_USE;
-import static org.m_ld.guicicle.mqtt.MqttConsumer.subscription;
+import static org.m_ld.guicicle.channel.ChannelOptions.Quality.AT_LEAST_ONCE;
+import static org.m_ld.guicicle.channel.ChannelOptions.Quality.AT_MOST_ONCE;
 import static org.m_ld.guicicle.mqtt.MqttTopicAddress.pattern;
 
 /**
@@ -40,15 +42,21 @@ public class MqttPresence implements MqttConsumer, MqttProducer
 
         PresenceAddress()
         {
-            super("__presence/+/#");
-            this.clientId = "";
-            this.consumerId = null;
+            this("__presence/+/#");
+        }
+
+        PresenceAddress(String pattern)
+        {
+            this(pattern.split("/"));
         }
 
         PresenceAddress(String[] parts)
         {
             super(parts);
-            this.clientId = parts[2];
+            if (parts.length < 3)
+                throw new IllegalArgumentException("Presence address requires three or more parts");
+
+            this.clientId = "+".equals(parts[2]) ? "" : parts[2];
             this.consumerId = parts.length > 3 ? parts[3] : null;
         }
 
@@ -80,25 +88,34 @@ public class MqttPresence implements MqttConsumer, MqttProducer
 
     private static final String DISCONNECTED = "-";
     private static final PresenceAddress PRESENCE_ADDRESS = new PresenceAddress();
+    private final Subscription[] subscriptions;
     private final PresenceAddress baseAddress;
-    private final MqttClient mqtt;
+    private final MqttEventClient mqtt;
     private final Map<String, Map<String, MqttTopicAddress>> present = new HashMap<>();
     private final Map<Integer, Handler<AsyncResult<Void>>> joinHandlers = new HashMap<>();
     private final Handlers<AsyncResult<Void>> closeHandlers = new Handlers<>(SINGLE_USE);
+    private final Promise<Void> subscribed = promise(), unsubscribed = promise();
 
-    MqttPresence(MqttClient mqtt, String domain)
+    MqttPresence(MqttEventClient mqtt, String domain)
     {
         this.mqtt = mqtt;
         this.baseAddress = PRESENCE_ADDRESS.domain(domain);
+        this.subscriptions = new Subscription[]{new Subscription(baseAddress, AT_LEAST_ONCE)};
     }
 
     void join(String consumerId, String address, Handler<AsyncResult<Void>> handleResult)
     {
-        setStatus(consumerId, address, AT_LEAST_ONCE, msgIdResult -> {
-            if (msgIdResult.succeeded())
-                joinHandlers.put(msgIdResult.result(), handleResult);
+        // First check whether subscribed - this will normally just wave through
+        subscribed.future().setHandler(subscribeResult -> {
+            if (subscribeResult.succeeded())
+                setStatus(consumerId, address, AT_LEAST_ONCE, msgIdResult -> {
+                    if (msgIdResult.succeeded())
+                        joinHandlers.put(msgIdResult.result(), handleResult);
+                    else
+                        handleResult.handle(msgIdResult.mapEmpty());
+                });
             else
-                handleResult.handle(msgIdResult.mapEmpty());
+                handleResult.handle(subscribeResult);
         });
     }
 
@@ -116,43 +133,52 @@ public class MqttPresence implements MqttConsumer, MqttProducer
             .collect(toSet());
     }
 
-    @Override public List<Subscription> subscriptions()
+    @Override public Subscription[] subscriptions()
     {
-        return singletonList(subscription(baseAddress.toString(), AT_LEAST_ONCE));
+        return subscriptions;
     }
 
-    @Override public void onMessage(MqttPublishMessage msg)
+    @Override public void onMessage(MqttPublishMessage msg, Subscription subscription)
     {
-        baseAddress.match(msg.topicName()).ifPresent(presence -> {
-            final String address = msg.payload().toString();
-            if (DISCONNECTED.equals(address))
+        final PresenceAddress presence = new PresenceAddress(msg.topicName());
+        final String onTopicAddress = msg.payload().toString();
+        if (DISCONNECTED.equals(onTopicAddress))
+        {
+            if (presence.consumerId().isPresent() && present.containsKey(presence.clientId()))
             {
-                if (presence.consumerId().isPresent() && present.containsKey(presence.clientId()))
-                {
-                    LOG.fine(format("%s: Client %s consumer %s disconnected",
-                                    mqtt.clientId(), presence.clientId(), presence.consumerId().get()));
-                    final Set<String> channelIds = present.get(presence.clientId()).keySet();
-                    if (channelIds.remove(presence.consumerId().get()) && channelIds.isEmpty())
-                        present.remove(presence.clientId());
-                }
-                else if (!presence.consumerId().isPresent())
-                {
-                    // A whole client has disconnected
-                    LOG.fine(format("%s: Client %s disconnected", mqtt.clientId(), presence.clientId()));
+                LOG.fine(format("%s: Client %s consumer %s disconnected",
+                                mqtt.clientId(), presence.clientId(), presence.consumerId().get()));
+                final Set<String> channelIds = present.get(presence.clientId()).keySet();
+                if (channelIds.remove(presence.consumerId().get()) && channelIds.isEmpty())
                     present.remove(presence.clientId());
-                }
             }
-            else if (presence.consumerId().isPresent())
+            else if (!presence.consumerId().isPresent())
             {
-                LOG.fine(format("%s: Client %s consumer %s present on %s",
-                                mqtt.clientId(), presence.clientId(), presence.consumerId().get(), address));
-                present.computeIfAbsent(
-                    presence.clientId(), cid -> new HashMap<>()).put(presence.consumerId().get(), pattern(address));
+                // A whole client has disconnected
+                LOG.fine(format("%s: Client %s disconnected", mqtt.clientId(), presence.clientId()));
+                present.remove(presence.clientId());
             }
-        });
+        }
+        else if (presence.consumerId().isPresent())
+        {
+            LOG.fine(format("%s: Client %s consumer %s present on %s",
+                            mqtt.clientId(), presence.clientId(), presence.consumerId().get(), onTopicAddress));
+            present.computeIfAbsent(
+                presence.clientId(), cid -> new HashMap<>()).put(presence.consumerId().get(), pattern(onTopicAddress));
+        }
     }
 
-    @Override public void onProduced(Integer id)
+    @Override public void onSubscribe(AsyncResult<Void> subscribeResult)
+    {
+        subscribed.handle(subscribeResult);
+    }
+
+    @Override public void onUnsubscribe(AsyncResult<Void> unsubscribeResult)
+    {
+        unsubscribed.handle(unsubscribeResult);
+    }
+
+    @Override public void onPublished(Integer id)
     {
         final Handler<AsyncResult<Void>> joinHandler = joinHandlers.remove(id);
         if (joinHandler != null)
@@ -166,21 +192,18 @@ public class MqttPresence implements MqttConsumer, MqttProducer
 
     @Override public void close()
     {
-        mqtt.unsubscribe(baseAddress.toString());
-        closeHandlers.handle(succeededFuture());
+        mqtt.unsubscribe(this);
+        unsubscribed.future().setHandler(closeHandlers);
     }
 
-    private void setStatus(String consumerId, String address, MqttQoS qos, Handler<AsyncResult<Integer>> handleResult)
+    private void setStatus(String consumerId, String address, ChannelOptions.Quality qos,
+                           Handler<AsyncResult<Integer>> handleResult)
     {
         LOG.info(format("%s: Local consumer %s setting presence %s", mqtt.clientId(), consumerId, address));
 
         // Retain presence (but not absence) for new clients
         final boolean isRetain = !DISCONNECTED.equals(address);
-        mqtt.publish(baseAddress.withIds(mqtt.clientId(), consumerId).toString(),
-                     Buffer.buffer(address),
-                     qos,
-                     false,
-                     isRetain,
-                     handleResult);
+        final String topic = baseAddress.withIds(mqtt.clientId(), consumerId).toString();
+        mqtt.publish(topic, buffer(address), qos, false, isRetain).setHandler(handleResult);
     }
 }

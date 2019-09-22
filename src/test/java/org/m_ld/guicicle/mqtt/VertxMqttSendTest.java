@@ -20,11 +20,11 @@ import java.io.IOException;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
-public class VertxMqttSendTest extends VertxMqttTest
+public class VertxMqttSendTest extends VertxMqttWithBrokerTest
 {
     @BeforeClass public static void setUp(TestContext context) throws IOException
     {
-        VertxMqttTest.setUp(context, new JsonObject().put("presence.domain", "test"));
+        VertxMqttWithBrokerTest.setUp(context, new JsonObject().put("presence.domain", "test"));
     }
 
     @Test public void testSendStringToSelf(TestContext context)

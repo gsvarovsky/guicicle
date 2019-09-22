@@ -6,14 +6,11 @@
 package org.m_ld.guicicle.mqtt;
 
 import com.google.common.collect.Sets;
-import io.netty.handler.codec.mqtt.MqttQoS;
 import io.vertx.core.*;
 import io.vertx.core.eventbus.*;
 import io.vertx.core.eventbus.impl.BodyReadStream;
 import io.vertx.core.streams.ReadStream;
-import io.vertx.mqtt.MqttException;
 import io.vertx.mqtt.messages.MqttPublishMessage;
-import io.vertx.mqtt.messages.MqttSubAckMessage;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.m_ld.guicicle.Handlers;
@@ -21,6 +18,8 @@ import org.m_ld.guicicle.VertxCloseable;
 import org.m_ld.guicicle.channel.AbstractChannel;
 import org.m_ld.guicicle.channel.Channel;
 import org.m_ld.guicicle.channel.ChannelOptions;
+import org.m_ld.guicicle.mqtt.MqttDirectAddress.MqttReplyAddress;
+import org.m_ld.guicicle.mqtt.MqttDirectAddress.MqttSendAddress;
 
 import java.util.*;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -30,13 +29,11 @@ import static io.vertx.core.Future.succeededFuture;
 import static io.vertx.core.Promise.promise;
 import static io.vertx.core.eventbus.ReplyFailure.NO_HANDLERS;
 import static java.lang.String.format;
-import static java.util.Arrays.asList;
-import static java.util.Collections.emptyList;
-import static java.util.Collections.singletonList;
+import static java.util.Arrays.stream;
 import static java.util.Objects.requireNonNull;
-import static org.m_ld.guicicle.Handlers.Flag.SINGLE_INSTANCE;
 import static org.m_ld.guicicle.Handlers.Flag.SINGLE_USE;
 import static org.m_ld.guicicle.Vertice.when;
+import static org.m_ld.guicicle.channel.ChannelOptions.Quality.AT_MOST_ONCE;
 import static org.m_ld.guicicle.mqtt.MqttDirectAddress.MqttReplyAddress.REPLY_ADDRESS;
 import static org.m_ld.guicicle.mqtt.MqttDirectAddress.MqttSendAddress.SEND_ADDRESS;
 import static org.m_ld.guicicle.mqtt.MqttTopicAddress.pattern;
@@ -58,17 +55,6 @@ class MqttChannel<T> extends AbstractChannel<T>
 
         mqttEventClient.subscribe(replier);
         mqttEventClient.addProducer(replier);
-    }
-
-    private MqttQoS qos(DeliveryOptions options)
-    {
-        return options instanceof ChannelOptions ?
-            MqttEventVertice.MQTT_QOS.get(((ChannelOptions)options).getQuality()) : qos();
-    }
-
-    private MqttQoS qos()
-    {
-        return MqttEventVertice.MQTT_QOS.get(options().getQuality());
     }
 
     @Override public <E> Channel<E> channel(String address, ChannelOptions options)
@@ -103,10 +89,17 @@ class MqttChannel<T> extends AbstractChannel<T>
             wif.producedHandler.handle(event.mapEmpty());
     }
 
+    private void handleIfFailed(AsyncResult<?> result)
+    {
+        if (result.failed())
+            mqttEventClient.exceptionHandlers().handle(result.cause());
+    }
+
     class MqttChannelStream implements VertxCloseable
     {
         Handler<Throwable> exceptionHandler;
         final Handlers<AsyncResult<Void>> endHandlers = new Handlers<>(SINGLE_USE);
+        final Promise<Void> canClose = promise();
 
         public String address()
         {
@@ -126,8 +119,11 @@ class MqttChannel<T> extends AbstractChannel<T>
 
         public void close()
         {
-            mqttEventClient.exceptionHandlers().remove(exceptionHandler);
-            endHandlers.handle(succeededFuture());
+            // TODO: Timeout on canClose
+            canClose.future().setHandler(result -> {
+                endHandlers.handle(result);
+                mqttEventClient.exceptionHandlers().remove(exceptionHandler);
+            });
         }
     }
 
@@ -139,26 +135,26 @@ class MqttChannel<T> extends AbstractChannel<T>
          * MqttChannelReplier#repliesInFlight}.
          */
         final Map<Object, MqttEventInFlight<M>> writesInFlight = new LinkedHashMap<>(options().getBufferSize());
-        final MqttDirectAddress.MqttSendAddress sendAddress = SEND_ADDRESS.fromId(channelId()).topic(address());
+        final MqttSendAddress sendAddress = SEND_ADDRESS.fromId(channelId()).topic(address());
         final Set<String> recentlySentTo = new HashSet<>();
 
         void write(MqttEventInFlight<M> wif, @Nullable DeliveryOptions options)
         {
+            final ChannelOptions cOptions = options(options);
             final Future<String> address = wif.isSend() ?
-                nextSendAddress(wif, options(options)) : succeededFuture(address());
+                nextSendAddress(wif, cOptions) : succeededFuture(address());
             address.setHandler(addressResult -> {
                 if (addressResult.succeeded())
                     write(addressResult.result(), wif, options);
-                else if (qos(options) != MqttQoS.AT_MOST_ONCE)
+                else if (cOptions.getQuality() != AT_MOST_ONCE)
                     produced(addressResult.mapEmpty(), wif);
             });
         }
 
         void write(String address, MqttEventInFlight<M> wif, @Nullable DeliveryOptions options)
         {
-            options = options(options);
             mqttEventClient
-                .publish(address, wif.message, qos(options), options)
+                .publish(address, wif.message, options(options))
                 .setHandler(published -> {
                     if (published.succeeded())
                         if (published.result() == null)
@@ -221,7 +217,7 @@ class MqttChannel<T> extends AbstractChannel<T>
             });
         }
 
-        @Override public void onProduced(Integer id)
+        @Override public void onPublished(Integer id)
         {
             final MqttEventInFlight<M> wif = writesInFlight.remove(id);
             if (wif != null)
@@ -238,33 +234,44 @@ class MqttChannel<T> extends AbstractChannel<T>
 
     class MqttChannelReplier extends MqttChannelWriter<Object> implements MqttConsumer
     {
-        final MqttDirectAddress.MqttReplyAddress repliesAddress = REPLY_ADDRESS.toId(channelId());
+        final Subscription[] subscriptions = new Subscription[]{
+            new Subscription(REPLY_ADDRESS.toId(channelId()), options().getQuality())
+        };
         final Map<String, Handler<AsyncResult<Message>>> repliesInFlight = new HashMap<>();
 
-        @Override public List<Subscription> subscriptions()
+        @Override public Subscription[] subscriptions()
         {
-            return singletonList(MqttConsumer.subscription(repliesAddress.toString(), qos()));
+            return subscriptions;
         }
 
-        @Override public void onMessage(MqttPublishMessage message)
+        @Override public void onMessage(MqttPublishMessage message, Subscription subscription)
         {
-            repliesAddress.match(message.topicName()).ifPresent(address -> {
-                // Received a reply to this channel, find a reply handler.
-                final Handler<AsyncResult<Message>> replyHandler = repliesInFlight.remove(address.sentMessageId());
-                if (replyHandler != null)
-                {
-                    final MultiMap headers = MultiMap.caseInsensitiveMultiMap();
-                    final Object body = mqttEventClient.decodeFromWire(message, headers);
-                    replyHandler.handle(succeededFuture(new MqttEventMessage<>(
-                        address(), headers, body, replier.create(address))));
-                }
-            });
+            // Received a reply to this channel, find a reply handler.
+            final MqttReplyAddress repliedAddress = new MqttReplyAddress(message.topicName());
+            final Handler<AsyncResult<Message>> replyHandler = repliesInFlight.remove(repliedAddress.sentMessageId());
+            if (replyHandler != null)
+            {
+                final MultiMap headers = MultiMap.caseInsensitiveMultiMap();
+                final Object body = mqttEventClient.decodeFromWire(message, headers);
+                replyHandler.handle(succeededFuture(new MqttEventMessage<>(
+                    address(), headers, body, replier.create(repliedAddress))));
+            }
         }
 
-        @Override public void onSubscribeSent(AsyncResult<Integer> subscribeSendResult, int qosIndex)
+        @Override public void onSubscribe(AsyncResult<Void> subscribeResult)
         {
-            if (subscribeSendResult.failed())
-                mqttEventClient.exceptionHandlers().handle(subscribeSendResult.cause());
+            handleIfFailed(subscribeResult);
+        }
+
+        @Override public void onUnsubscribe(AsyncResult<Void> unsubscribeResult)
+        {
+            canClose.handle(unsubscribeResult);
+        }
+
+        @Override public void close()
+        {
+            mqttEventClient.unsubscribe(this);
+            super.close();
         }
 
         MqttEventMessage.Replier create(MqttDirectAddress sentAddress)
@@ -272,7 +279,7 @@ class MqttChannel<T> extends AbstractChannel<T>
             return new MqttEventMessage.Replier()
             {
                 // Note this address is not complete: the messageId is added when replying
-                final MqttDirectAddress.MqttReplyAddress replyAddress = REPLY_ADDRESS
+                final MqttReplyAddress replyAddress = REPLY_ADDRESS
                     .fromId(channelId())
                     .toId(sentAddress.fromId())
                     .sentMessageId(sentAddress.messageId());
@@ -296,6 +303,12 @@ class MqttChannel<T> extends AbstractChannel<T>
     {
         int writeQueueMaxSize = options().getBufferSize();
         final Handlers<Void> drainHandlers = new Handlers<>(SINGLE_USE);
+
+        public MqttChannelProducer()
+        {
+            // We have no close requirements
+            canClose.complete();
+        }
 
         @Override public MqttChannelProducer send(T message)
         {
@@ -393,28 +406,26 @@ class MqttChannel<T> extends AbstractChannel<T>
 
     class MqttChannelConsumer extends MqttChannelStream implements MqttConsumer, MessageConsumer<T>
     {
-        final MqttDirectAddress.MqttSendAddress sendAddress = SEND_ADDRESS.toId(channelId()).topic(address());
+        final Subscription
+            publishSub = new Subscription(topicAddress, options().getQuality()),
+            sendSub = new Subscription(SEND_ADDRESS.toId(channelId()).topic(address()), options().getQuality());
+        final Subscription[] subscriptions = mqttEventClient.presence().isPresent() ?
+            new Subscription[]{publishSub, sendSub} : new Subscription[]{publishSub};
         final Handlers<Message<T>> messageHandlers = new Handlers<>();
-        final Handlers<AsyncResult<Void>> subscribeHandlers = new Handlers<>(SINGLE_USE);
-        final Handlers<AsyncResult<Void>> unsubscribeHandler = new Handlers<>(SINGLE_INSTANCE, SINGLE_USE);
-        int subscribeId = MqttEventVertice.NO_PACKET,
-            unsubscribeId = MqttEventVertice.NO_PACKET,
-            qosIndex = MqttEventVertice.NO_PACKET,
-            maxBufferedMessages = options().getBufferSize();
-        boolean subscribed = false;
+        final Handlers<AsyncResult<Void>>
+            subscribeHandlers = new Handlers<>(SINGLE_USE),
+            unsubscribeHandlers = new Handlers<>(SINGLE_USE);
+        int maxBufferedMessages = options().getBufferSize();
         Queue<MqttEventMessage<T>> pauseBuffer;
 
         MqttChannelConsumer()
         {
-            subscribeHandlers.add(result -> {
-                if (result.succeeded())
-                    subscribed = true;
-            });
+            unsubscribeHandlers.add(canClose);
         }
 
         @Override public MqttChannelConsumer handler(Handler<Message<T>> handler)
         {
-            this.messageHandlers.add(handler);
+            messageHandlers.add(handler);
             // Subscribe to the given address
             mqttEventClient.subscribe(this);
             return this;
@@ -465,7 +476,8 @@ class MqttChannel<T> extends AbstractChannel<T>
 
         @Override public boolean isRegistered()
         {
-            return subscribed;
+            return !messageHandlers.isEmpty() && stream(subscriptions).allMatch(
+                s -> s.subscribed != null && s.subscribed.succeeded());
         }
 
         @Override public MqttChannelConsumer setMaxBufferedMessages(int maxBufferedMessages)
@@ -491,63 +503,34 @@ class MqttChannel<T> extends AbstractChannel<T>
 
         @Override public void unregister(Handler<AsyncResult<Void>> completionHandler)
         {
-            unsubscribeHandler.set(completionHandler);
-            mqttEventClient.unsubscribe(this).setHandler(unsubResult -> {
-                if (unsubResult.succeeded())
-                    unsubscribeId = unsubResult.result().resultAt(0);
-                else
-                    unsubscribeHandler.handle(failedFuture(unsubResult.cause()));
-            });
+            unsubscribeHandlers.add(completionHandler);
+            mqttEventClient.unsubscribe(this);
         }
 
-        @Override public List<Subscription> subscriptions()
+        @Override public Subscription[] subscriptions()
         {
-            if (!messageHandlers.isEmpty())
-            {
-                if (mqttEventClient.presence().isPresent())
-                    return asList(MqttConsumer.subscription(address(), qos()),
-                                  MqttConsumer.subscription(sendAddress.toString(), qos()));
-                else
-                    return singletonList(MqttConsumer.subscription(address(), qos()));
-            }
+            // Subscription is lazy per MessageConsumer contract, see handler()
+            return !messageHandlers.isEmpty() ? subscriptions : new Subscription[0];
+        }
+
+        @Override public void onMessage(MqttPublishMessage message, Subscription subscription)
+        {
+            assert subscription == sendSub || subscription == publishSub;
+
+            final MultiMap headers = MultiMap.caseInsensitiveMultiMap();
+            //noinspection unchecked
+            final T payload = (T)mqttEventClient.decodeFromWire(message, headers);
+            final MqttEventMessage<T> eventMessage;
+            if (subscription == sendSub)
+                eventMessage = new MqttEventMessage<>(
+                    address(), headers, payload, replier.create(new MqttSendAddress(message.topicName())));
             else
-            {
-                return emptyList();
-            }
-        }
+                eventMessage = new MqttEventMessage<>(address(), headers, payload);
 
-        @Override public void onSubscribeSent(AsyncResult<Integer> subscribeSendResult, int qosIndex)
-        {
-            if (subscribeSendResult.succeeded())
-            {
-                this.qosIndex = qosIndex;
-                this.subscribeId = subscribeSendResult.result();
-            }
+            if (pauseBuffer == null)
+                handleMessage(eventMessage);
             else
-            {
-                subscribeHandlers.handle(failedFuture(subscribeSendResult.cause()));
-            }
-        }
-
-        @Override public void onMessage(MqttPublishMessage message)
-        {
-            Optional<MqttDirectAddress.MqttSendAddress> sent = Optional.empty();
-            if (topicAddress.match(message.topicName()).isPresent() ||
-                (sent = sendAddress.match(message.topicName())).isPresent())
-            {
-                final MultiMap headers = MultiMap.caseInsensitiveMultiMap();
-                //noinspection unchecked
-                final T payload = (T)mqttEventClient.decodeFromWire(message, headers);
-                final MqttEventMessage<T> eventMessage = sent
-                    .map(sentAddress -> new MqttEventMessage<>(
-                        address(), headers, payload, replier.create(sentAddress)))
-                    .orElseGet(() -> new MqttEventMessage<>(address(), headers, payload));
-
-                if (pauseBuffer == null)
-                    handleMessage(eventMessage);
-                else
-                    pauseBuffer.add(eventMessage);
-            }
+                pauseBuffer.add(eventMessage);
         }
 
         void handleMessage(MqttEventMessage<T> eventMessage)
@@ -559,40 +542,18 @@ class MqttChannel<T> extends AbstractChannel<T>
                 messageHandlers.handle(eventMessage);
         }
 
-        @Override public void onSubscribeAck(MqttSubAckMessage subAckMessage)
+        @Override public void onSubscribe(AsyncResult<Void> subscribeResult)
         {
-            if (subscribeId == subAckMessage.messageId())
-            {
-                try
-                {
-                    final MqttQoS qosReceived =
-                        MqttQoS.valueOf(subAckMessage.grantedQoSLevels().get(qosIndex));
-                    if (qosReceived != qos())
-                        throw new IllegalStateException(
-                            format("Mismatched QoS: expecting %s, received %s", qos(), qosReceived));
-                    final Optional<MqttPresence> presence = mqttEventClient.presence();
-                    if (presence.isPresent()) // Announce our presence
-                        presence.get().join(channelId(), address(), subscribeHandlers);
-                    else
-                        subscribeHandlers.handle(succeededFuture());
-                }
-                catch (Exception e)
-                {
-                    final MqttException exception = new MqttException(MqttEventVertice.MQTTASYNC_BAD_QOS,
-                                                                      e.getMessage());
-                    exception.initCause(e);
-                    subscribeHandlers.handle(failedFuture(exception));
-                }
-            }
+            final Optional<MqttPresence> presence = mqttEventClient.presence();
+            if (subscribeResult.succeeded() && presence.isPresent()) // Announce our presence
+                presence.get().join(channelId(), address(), subscribeHandlers);
+            else
+                subscribeHandlers.handle(subscribeResult);
         }
 
-        @Override public void onUnsubscribeAck(int messageId)
+        @Override public void onUnsubscribe(AsyncResult<Void> unsubscribeResult)
         {
-            if (unsubscribeId == messageId)
-            {
-                unsubscribeHandler.handle(succeededFuture());
-                close();
-            }
+            unsubscribeHandlers.handle(unsubscribeResult);
         }
 
         @Override public void close()

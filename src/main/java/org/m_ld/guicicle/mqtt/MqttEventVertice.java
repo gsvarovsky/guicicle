@@ -8,15 +8,12 @@ package org.m_ld.guicicle.mqtt;
 import com.google.inject.Inject;
 import com.google.inject.name.Named;
 import io.netty.handler.codec.mqtt.MqttQoS;
-import io.vertx.core.CompositeFuture;
-import io.vertx.core.Future;
-import io.vertx.core.MultiMap;
-import io.vertx.core.Promise;
+import io.vertx.core.*;
 import io.vertx.core.buffer.Buffer;
-import io.vertx.core.eventbus.DeliveryOptions;
 import io.vertx.mqtt.MqttClient;
 import io.vertx.mqtt.MqttClientOptions;
 import io.vertx.mqtt.messages.MqttPublishMessage;
+import io.vertx.mqtt.messages.MqttSubAckMessage;
 import org.m_ld.guicicle.Handlers;
 import org.m_ld.guicicle.TimerProvider;
 import org.m_ld.guicicle.TimerProvider.Periodic;
@@ -26,14 +23,22 @@ import org.m_ld.guicicle.channel.Channel;
 import org.m_ld.guicicle.channel.ChannelOptions;
 import org.m_ld.guicicle.channel.ChannelOptions.Delivery;
 import org.m_ld.guicicle.channel.ChannelProvider;
+import org.m_ld.guicicle.mqtt.MqttConsumer.Subscription;
 
 import java.util.*;
+import java.util.function.Consumer;
+import java.util.function.Function;
 
+import static io.vertx.core.Future.failedFuture;
 import static io.vertx.core.Future.succeededFuture;
+import static java.lang.String.format;
 import static java.lang.System.currentTimeMillis;
+import static java.util.Arrays.stream;
 import static java.util.Collections.singleton;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static java.util.stream.Collectors.toList;
+import static org.m_ld.guicicle.channel.ChannelOptions.Quality.*;
+import static org.m_ld.guicicle.mqtt.MqttConsumer.Subscription.isComplete;
 
 /**
  * Channel provider using MQTT.
@@ -42,14 +47,13 @@ import static java.util.stream.Collectors.toList;
  */
 public class MqttEventVertice implements ChannelProvider, Vertice, MqttEventClient
 {
-    static final int MQTTASYNC_BAD_QOS = -9, NO_PACKET = -1;
     static final Map<ChannelOptions.Quality, MqttQoS> MQTT_QOS = new HashMap<>();
 
     static
     {
-        MQTT_QOS.put(ChannelOptions.Quality.AT_MOST_ONCE, MqttQoS.AT_MOST_ONCE);
-        MQTT_QOS.put(ChannelOptions.Quality.AT_LEAST_ONCE, MqttQoS.AT_LEAST_ONCE);
-        MQTT_QOS.put(ChannelOptions.Quality.EXACTLY_ONCE, MqttQoS.EXACTLY_ONCE);
+        MQTT_QOS.put(AT_MOST_ONCE, MqttQoS.AT_MOST_ONCE);
+        MQTT_QOS.put(AT_LEAST_ONCE, MqttQoS.AT_LEAST_ONCE);
+        MQTT_QOS.put(EXACTLY_ONCE, MqttQoS.EXACTLY_ONCE);
     }
 
     private int port = MqttClientOptions.DEFAULT_PORT;
@@ -102,7 +106,7 @@ public class MqttEventVertice implements ChannelProvider, Vertice, MqttEventClie
     {
         if (domain != null && presence == null)
         {
-            presence = new MqttPresence(mqtt, domain);
+            presence = new MqttPresence(this, domain);
             consumers.add(presence);
             producers.add(presence);
         }
@@ -112,10 +116,10 @@ public class MqttEventVertice implements ChannelProvider, Vertice, MqttEventClie
 
     @Override public void start(Future<Void> startFuture)
     {
-        mqtt.publishHandler(msg -> consumers.forEach(c -> c.onMessage(msg)))
-            .subscribeCompletionHandler(msg -> consumers.forEach(c -> c.onSubscribeAck(msg)))
-            .unsubscribeCompletionHandler(msg -> consumers.forEach(c -> c.onUnsubscribeAck(msg)))
-            .publishCompletionHandler(msg -> producers.forEach(p -> p.onProduced(msg)))
+        mqtt.publishHandler(this::onMessage)
+            .subscribeCompletionHandler(this::onSubscribeAck)
+            .unsubscribeCompletionHandler(this::onUnsubscribeAck)
+            .publishCompletionHandler(this::onPublishComplete)
             .exceptionHandler(exceptionHandlers)
             .connect(port, host, connectResult -> {
                 if (connectResult.succeeded())
@@ -133,7 +137,7 @@ public class MqttEventVertice implements ChannelProvider, Vertice, MqttEventClie
     @Override public void stop(Future<Void> stopFuture)
     {
         tickHandlers.cancel();
-        final ArrayList<VertxCloseable> closeables = new ArrayList<>(producers);
+        final Set<VertxCloseable> closeables = new HashSet<>(producers);
         closeables.addAll(consumers);
         CompositeFuture.all(closeables.stream().map(
             closeable -> Vertice.<Void>when(closeable::close)).collect(toList()))
@@ -175,35 +179,53 @@ public class MqttEventVertice implements ChannelProvider, Vertice, MqttEventClie
         return exceptionHandlers;
     }
 
-    @Override public Future<Integer> publish(String topic, Object payload, MqttQoS qos,
-                                             DeliveryOptions options)
+    @Override public Future<Integer> publish(String topic, Object event, ChannelOptions options)
     {
-        final Buffer buffer = eventCodec.encodeToWire(payload, options);
-        if (qos == MqttQoS.AT_MOST_ONCE)
+        return publish(topic, eventCodec.encodeToWire(event, options), options.getQuality(), false, false);
+    }
+
+    @Override public Future<Integer> publish(
+        String topic, Buffer body, ChannelOptions.Quality qos, boolean isDup, boolean isRetain)
+    {
+        if (qos == AT_MOST_ONCE)
         {
-            mqtt.publish(topic, buffer, qos, false, false);
+            mqtt.publish(topic, body, MqttQoS.AT_MOST_ONCE, isDup, isRetain);
             return succeededFuture(null);
         }
         else
         {
             final Promise<Integer> publishSent = Promise.promise();
-            mqtt.publish(topic, buffer, qos, false, false, publishSent);
+            mqtt.publish(topic, body, MQTT_QOS.get(qos), isDup, isRetain, publishSent);
             return publishSent.future();
         }
     }
 
-    @Override public CompositeFuture unsubscribe(MqttConsumer consumer)
+    @Override public void unsubscribe(MqttConsumer consumer)
     {
-        return CompositeFuture.all(consumer.subscriptions().stream().map(
-            sub -> Vertice.<String, Integer>when(mqtt::unsubscribe, sub.topic())).collect(toList()));
+        CompositeFuture.all(stream(consumer.subscriptions()).map(
+            subscription -> {
+                if (!isComplete(subscription.subscribed))
+                    // We never subscribed; indicate trivial success
+                    return succeededFuture(subscription.unsubscribed = succeededFuture());
+                else if (subscription.unsubscribed != null)
+                    // We have already unsubscribed, or we're already waiting for an ack
+                    return succeededFuture(subscription.unsubscribed);
+                else
+                    return Vertice.<String, Integer>when(mqtt::unsubscribe, subscription.address.toString())
+                        // If the subscribe succeeds, wait for the subscribe ack
+                        .map(unsubId -> subscription.unsubscribed = succeededFuture(unsubId))
+                        .otherwise(failure -> subscription.unsubscribed = failedFuture(failure));
+            }).collect(toList()))
+            // In the case that all unsubscribes have failed, signal the failure to the consumer
+            .setHandler(allResult -> signalIfDone(consumer, consumer::onUnsubscribe, s -> s.unsubscribed));
     }
 
     @Override public Object decodeFromWire(MqttPublishMessage message, MultiMap headers)
     {
-        headers.add("__mqtt.isDup", Boolean.toString(message.isDup()));
-        headers.add("__mqtt.isRetain", Boolean.toString(message.isRetain()));
-        headers.add("__mqtt.qosLevel", message.qosLevel().name());
-        headers.add("__mqtt.messageId", Integer.toString(message.messageId()));
+        headers.set("__mqtt.isDup", Boolean.toString(message.isDup()));
+        headers.set("__mqtt.isRetain", Boolean.toString(message.isRetain()));
+        headers.set("__mqtt.qosLevel", message.qosLevel().name());
+        headers.set("__mqtt.messageId", Integer.toString(message.messageId()));
         return eventCodec.decodeFromWire(message.payload(), headers);
     }
 
@@ -215,6 +237,11 @@ public class MqttEventVertice implements ChannelProvider, Vertice, MqttEventClie
     @Override public Handlers<Long> tickHandlers()
     {
         return tickHandlers;
+    }
+
+    @Override public String clientId()
+    {
+        return mqtt.clientId();
     }
 
     @Override public boolean isConnected()
@@ -231,13 +258,91 @@ public class MqttEventVertice implements ChannelProvider, Vertice, MqttEventClie
     private void subscribeNow(Iterable<MqttConsumer> consumers)
     {
         final Map<String, Integer> topics = new LinkedHashMap<>();
-        final Map<MqttConsumer, Integer> consumerQosIndex = new HashMap<>();
-        consumers.forEach(mqttConsumer -> {
-            consumerQosIndex.put(mqttConsumer, topics.size());
-            mqttConsumer.subscriptions().forEach(sub -> topics.put(sub.topic(), sub.qos().ordinal()));
-        });
+        for (MqttConsumer mqttConsumer : consumers)
+        {
+            stream(mqttConsumer.subscriptions()).forEach(subscription -> {
+                topics.put(subscription.address.toString(), subscription.qos.ordinal());
+                subscription.qosIndex = topics.size() - 1;
+            });
+        }
         if (!topics.isEmpty())
-            mqtt.subscribe(topics, sent -> consumerQosIndex.forEach(
-                (mqttConsumer, qosIndex) -> mqttConsumer.onSubscribeSent(sent, qosIndex)));
+        {
+            mqtt.subscribe(topics, sent -> {
+                for (MqttConsumer consumer : consumers)
+                {
+                    stream(consumer.subscriptions()).forEach(sub -> sub.subscribed = sent);
+                    // In the case that all subscribes have failed, signal the failure to the consumer
+                    signalIfDone(consumer, consumer::onSubscribe, s -> s.subscribed);
+                }
+            });
+        }
+    }
+
+    private void onSubscribeAck(MqttSubAckMessage subAckMessage)
+    {
+        for (MqttConsumer consumer : consumers)
+        {
+            boolean changed = false;
+            for (Subscription subscription : consumer.subscriptions())
+            {
+                if (subscription.subscribed != null &&
+                    Objects.equals(subscription.subscribed.result(), subAckMessage.messageId()))
+                {
+                    final MqttQoS qosReceived =
+                        MqttQoS.valueOf(subAckMessage.grantedQoSLevels().get(subscription.qosIndex));
+                    if (qosReceived == MQTT_QOS.get(subscription.qos))
+                        subscription.subscribed = succeededFuture();
+                    else
+                        subscription.subscribed = failedFuture(
+                            format("Mismatched QoS: expecting %s, received %s", subscription.qos, qosReceived));
+                    changed = true;
+                }
+            }
+            if (changed)
+                signalIfDone(consumer, consumer::onSubscribe, s -> s.subscribed);
+        }
+    }
+
+    private void onUnsubscribeAck(Integer id)
+    {
+        for (MqttConsumer consumer : consumers)
+        {
+            boolean changed = false;
+            for (Subscription subscription : consumer.subscriptions())
+            {
+                if (subscription.unsubscribed != null &&
+                    Objects.equals(subscription.unsubscribed.result(), id))
+                {
+                    subscription.unsubscribed = succeededFuture();
+                    changed = true;
+                }
+            }
+            if (changed)
+                signalIfDone(consumer, consumer::onUnsubscribe, s -> s.unsubscribed);
+        }
+    }
+
+    private void signalIfDone(MqttConsumer consumer,
+                              Consumer<AsyncResult<Void>> signal,
+                              Function<Subscription, AsyncResult<Integer>> getResult)
+    {
+        if (stream(consumer.subscriptions()).map(getResult).allMatch(Subscription::isComplete))
+            signal.accept(stream(consumer.subscriptions()).map(getResult)
+                              .filter(AsyncResult::failed).findAny()
+                              .<Future<Void>>map(s -> failedFuture(s.cause()))
+                              .orElse(succeededFuture()));
+    }
+
+    private void onMessage(MqttPublishMessage msg)
+    {
+        for (MqttConsumer consumer : consumers)
+            for (Subscription subscription : consumer.subscriptions())
+                if (subscription.address.match(msg.topicName()).isPresent())
+                    consumer.onMessage(msg, subscription);
+    }
+
+    private void onPublishComplete(Integer msgId)
+    {
+        producers.forEach(p -> p.onPublished(msgId));
     }
 }

@@ -22,11 +22,11 @@ import static io.vertx.core.MultiMap.caseInsensitiveMultiMap;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 
-public class VertxMqttPublishTest extends VertxMqttTest
+public class VertxMqttPublishTest extends VertxMqttWithBrokerTest
 {
     @BeforeClass public static void setUp(TestContext context) throws IOException
     {
-        VertxMqttTest.setUp(context, new JsonObject()); // All default options
+        VertxMqttWithBrokerTest.setUp(context, new JsonObject()); // All default options
     }
 
     @Test public void testPublishString(TestContext context)

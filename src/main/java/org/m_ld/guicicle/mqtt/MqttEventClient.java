@@ -5,13 +5,12 @@
 
 package org.m_ld.guicicle.mqtt;
 
-import io.netty.handler.codec.mqtt.MqttQoS;
-import io.vertx.core.CompositeFuture;
 import io.vertx.core.Future;
 import io.vertx.core.MultiMap;
-import io.vertx.core.eventbus.DeliveryOptions;
+import io.vertx.core.buffer.Buffer;
 import io.vertx.mqtt.messages.MqttPublishMessage;
 import org.m_ld.guicicle.Handlers;
+import org.m_ld.guicicle.channel.ChannelOptions;
 
 import java.util.Optional;
 
@@ -21,13 +20,15 @@ public interface MqttEventClient
 
     void subscribe(MqttConsumer consumer);
 
-    CompositeFuture unsubscribe(MqttConsumer consumer);
+    void unsubscribe(MqttConsumer consumer);
 
     void addConsumer(MqttConsumer consumer);
 
     void addProducer(MqttProducer producer);
 
-    Future<Integer> publish(String topic, Object payload, MqttQoS qos, DeliveryOptions options);
+    Future<Integer> publish(String topic, Object event, ChannelOptions options);
+
+    Future<Integer> publish(String topic, Buffer body, ChannelOptions.Quality qos, boolean isDup, boolean isRetain);
 
     Handlers<Throwable> exceptionHandlers();
 
@@ -36,4 +37,6 @@ public interface MqttEventClient
     Optional<MqttPresence> presence();
 
     Handlers<Long> tickHandlers();
+
+    String clientId();
 }
