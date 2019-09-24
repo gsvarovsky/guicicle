@@ -105,6 +105,8 @@ public class MqttPresence implements MqttConsumer, MqttProducer
 
     void join(String consumerId, String address, Handler<AsyncResult<Void>> handleResult)
     {
+        LOG.fine(() -> format("%s: Local consumer %s joining presence %s", mqtt.clientId(), consumerId, address));
+
         // First check whether subscribed - this will normally just wave through
         subscribed.future().setHandler(subscribeResult -> {
             if (subscribeResult.succeeded())
@@ -170,11 +172,13 @@ public class MqttPresence implements MqttConsumer, MqttProducer
 
     @Override public void onSubscribe(AsyncResult<Void> subscribeResult)
     {
+        LOG.fine(() -> format("Presence subscribed to %s with %s", baseAddress, subscribeResult));
         subscribed.handle(subscribeResult);
     }
 
     @Override public void onUnsubscribe(AsyncResult<Void> unsubscribeResult)
     {
+        LOG.fine(() -> format("Presence unsubscribed from %s with %s", baseAddress, unsubscribeResult));
         unsubscribed.handle(unsubscribeResult);
     }
 
