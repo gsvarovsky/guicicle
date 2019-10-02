@@ -23,6 +23,7 @@ import org.m_ld.guicicle.channel.Channel;
 import org.m_ld.guicicle.channel.ChannelOptions;
 import org.m_ld.guicicle.channel.ChannelOptions.Delivery;
 import org.m_ld.guicicle.channel.ChannelProvider;
+import org.m_ld.guicicle.channel.MessageCodecs;
 import org.m_ld.guicicle.mqtt.MqttConsumer.Subscription;
 
 import java.util.*;
@@ -60,7 +61,7 @@ public class MqttEventVertice implements ChannelProvider, Vertice, MqttEventClie
     private String host = MqttClientOptions.DEFAULT_HOST;
     private boolean connected = false;
     private final MqttClient mqtt;
-    private final MqttEventCodec eventCodec;
+    private final MessageCodecs messageCodecs;
     private final List<MqttConsumer> consumers = new ArrayList<>();
     private final List<MqttProducer> producers = new ArrayList<>();
     // Mqtt exception handling is global. Best we can do is provide for multiple handlers.
@@ -85,10 +86,12 @@ public class MqttEventVertice implements ChannelProvider, Vertice, MqttEventClie
         }
     }
 
-    @Inject public MqttEventVertice(MqttClient mqtt, MqttEventCodec eventCodec, @Periodic TimerProvider timerProvider)
+    @Inject public MqttEventVertice(MqttClient mqtt,
+                                    MessageCodecs messageCodecs,
+                                    @Periodic TimerProvider timerProvider)
     {
         this.mqtt = mqtt;
-        this.eventCodec = eventCodec;
+        this.messageCodecs = messageCodecs;
         this.tickHandlers = new TickHandlers(timerProvider, SECONDS.toMillis(1));
     }
 
@@ -181,7 +184,7 @@ public class MqttEventVertice implements ChannelProvider, Vertice, MqttEventClie
 
     @Override public Future<Integer> publish(String topic, Object event, ChannelOptions options)
     {
-        return publish(topic, eventCodec.encodeToWire(event, options), options.getQuality(), false, false);
+        return publish(topic, messageCodecs.encode(event, options), options.getQuality(), false, false);
     }
 
     @Override public Future<Integer> publish(
@@ -220,13 +223,13 @@ public class MqttEventVertice implements ChannelProvider, Vertice, MqttEventClie
             .setHandler(allResult -> signalIfDone(consumer, consumer::onUnsubscribe, s -> s.unsubscribed));
     }
 
-    @Override public Object decodeFromWire(MqttPublishMessage message, MultiMap headers)
+    @Override public Object decodeFromWire(MqttPublishMessage message, MultiMap headers, String codecHint)
     {
         headers.set("__mqtt.isDup", Boolean.toString(message.isDup()));
         headers.set("__mqtt.isRetain", Boolean.toString(message.isRetain()));
         headers.set("__mqtt.qosLevel", message.qosLevel().name());
         headers.set("__mqtt.messageId", Integer.toString(message.messageId()));
-        return eventCodec.decodeFromWire(message.payload(), headers);
+        return messageCodecs.decode(message.payload(), headers, codecHint);
     }
 
     @Override public Optional<MqttPresence> presence()

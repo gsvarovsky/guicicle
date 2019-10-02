@@ -32,7 +32,7 @@ public interface MqttEventClient
 
     Handlers<Throwable> exceptionHandlers();
 
-    Object decodeFromWire(MqttPublishMessage message, MultiMap headers);
+    Object decodeFromWire(MqttPublishMessage message, MultiMap headers, String codecHint);
 
     Optional<MqttPresence> presence();
 

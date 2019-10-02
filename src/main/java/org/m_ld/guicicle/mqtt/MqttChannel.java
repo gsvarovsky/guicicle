@@ -252,7 +252,7 @@ class MqttChannel<T> extends AbstractChannel<T>
             if (replyHandler != null)
             {
                 final MultiMap headers = MultiMap.caseInsensitiveMultiMap();
-                final Object body = mqttEventClient.decodeFromWire(message, headers);
+                final Object body = mqttEventClient.decodeFromWire(message, headers, options().getCodecName());
                 replyHandler.handle(succeededFuture(new MqttEventMessage<>(
                     address(), headers, body, replier.create(repliedAddress))));
             }
@@ -519,7 +519,7 @@ class MqttChannel<T> extends AbstractChannel<T>
 
             final MultiMap headers = MultiMap.caseInsensitiveMultiMap();
             //noinspection unchecked
-            final T payload = (T)mqttEventClient.decodeFromWire(message, headers);
+            final T payload = (T)mqttEventClient.decodeFromWire(message, headers, options().getCodecName());
             final MqttEventMessage<T> eventMessage;
             if (subscription == sendSub)
                 eventMessage = new MqttEventMessage<>(

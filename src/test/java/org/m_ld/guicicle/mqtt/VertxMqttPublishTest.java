@@ -37,7 +37,7 @@ public class VertxMqttPublishTest extends VertxMqttWithBrokerTest
                              new ChannelOptions().addHeader("test", "fred")).producer().write("Hello");
             published.get().setHandler(context.asyncAssertSuccess(msg -> {
                 MultiMap headers = caseInsensitiveMultiMap();
-                assertEquals("Hello", EVENT_CODEC.decodeFromWire(msg.payload(), headers));
+                assertEquals("Hello", EVENT_CODEC.decode(msg.payload(), headers, null));
                 assertEquals("fred", headers.get("test"));
                 assertEquals(MqttQoS.AT_MOST_ONCE, msg.qosLevel());
                 assertEquals("testPublishString", msg.topicName());

@@ -23,9 +23,7 @@ import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.m_ld.guicicle.TimerProvider;
-import org.m_ld.guicicle.channel.Channel;
-import org.m_ld.guicicle.channel.ChannelOptions;
-import org.m_ld.guicicle.channel.UuidCodec;
+import org.m_ld.guicicle.channel.*;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
 import org.mockito.Mock;
@@ -58,13 +56,13 @@ public class MqttEventVerticeTest
     @Captor ArgumentCaptor<Handler<Throwable>> exceptionCaptor;
     @Captor ArgumentCaptor<Handler<AsyncResult<Integer>>> subSentCaptor;
     @Captor ArgumentCaptor<Map<String, Integer>> subQosCaptor;
-    private MqttEventCodec eventCodec;
+    private MessageCodecs messageCodecs;
     private final UuidCodec uuidCodec = new UuidCodec();
     private final Future<Void> startFuture = future();
 
     @Before public void setUp()
     {
-        eventCodec = new MqttEventCodec(codecManager);
+        messageCodecs = new ManagedCodecs(codecManager);
         when(mqtt.publishHandler(publishCaptor.capture())).thenReturn(mqtt);
         when(mqtt.subscribeCompletionHandler(subAckCaptor.capture())).thenReturn(mqtt);
         when(mqtt.unsubscribeCompletionHandler(unsubAckCaptor.capture())).thenReturn(mqtt);
@@ -82,7 +80,7 @@ public class MqttEventVerticeTest
 
     @Test public void testSignalsStart()
     {
-        new MqttEventVertice(mqtt, eventCodec, timerProvider).start(startFuture);
+        new MqttEventVertice(mqtt, messageCodecs, timerProvider).start(startFuture);
         assertTrue(startFuture.succeeded());
     }
 
@@ -94,7 +92,7 @@ public class MqttEventVerticeTest
             return mqtt;
         });
         final Future<Void> stopFuture = future();
-        final MqttEventVertice mqttEvents = new MqttEventVertice(mqtt, eventCodec, timerProvider);
+        final MqttEventVertice mqttEvents = new MqttEventVertice(mqtt, messageCodecs, timerProvider);
         mqttEvents.start(future());
         mqttEvents.stop(stopFuture);
         assertTrue(stopFuture.succeeded());
@@ -102,13 +100,13 @@ public class MqttEventVerticeTest
 
     @Test public void testConnects()
     {
-        new MqttEventVertice(mqtt, eventCodec, timerProvider).start(future());
+        new MqttEventVertice(mqtt, messageCodecs, timerProvider).start(future());
         verify(mqtt).connect(eq(MqttClientOptions.DEFAULT_PORT), eq(MqttClientOptions.DEFAULT_HOST), any());
     }
 
     @Test public void testConnectsWithHostPort()
     {
-        final MqttEventVertice mqttEvents = new MqttEventVertice(mqtt, eventCodec, timerProvider);
+        final MqttEventVertice mqttEvents = new MqttEventVertice(mqtt, messageCodecs, timerProvider);
         mqttEvents.setHost("m-ld.org");
         mqttEvents.setPort(9000);
         mqttEvents.start(future());
@@ -117,7 +115,7 @@ public class MqttEventVerticeTest
 
     @Test public void testConsumerReceivesMessage()
     {
-        final MqttEventVertice mqttEvents = new MqttEventVertice(mqtt, eventCodec, timerProvider);
+        final MqttEventVertice mqttEvents = new MqttEventVertice(mqtt, messageCodecs, timerProvider);
         mqttEvents.start(future());
         final ChannelOptions options = new ChannelOptions().setCodecName("UUID").setQuality(AT_MOST_ONCE);
         final Channel<UUID> channel = mqttEvents.channel("channel", options);
@@ -126,7 +124,7 @@ public class MqttEventVerticeTest
         final MqttPublishMessage message = mock(MqttPublishMessage.class);
         when(message.topicName()).thenReturn("channel");
         final UUID value = randomUUID();
-        final Buffer body = eventCodec.encodeToWire(value, options);
+        final Buffer body = messageCodecs.encode(value, options);
         when(message.payload()).thenReturn(body);
         when(message.qosLevel()).thenReturn(MqttQoS.AT_MOST_ONCE);
         publishCaptor.getValue().handle(message);
@@ -135,7 +133,7 @@ public class MqttEventVerticeTest
 
     @Test public void testConsumerUnsubscribesOnClose()
     {
-        final MqttEventVertice mqttEvents = new MqttEventVertice(mqtt, eventCodec, timerProvider);
+        final MqttEventVertice mqttEvents = new MqttEventVertice(mqtt, messageCodecs, timerProvider);
         mqttEvents.start(future());
         final ChannelOptions options = new ChannelOptions().setCodecName("UUID").setQuality(AT_MOST_ONCE);
         final Channel<UUID> channel = mqttEvents.channel("channel", options);
@@ -163,31 +161,31 @@ public class MqttEventVerticeTest
 
     @Test public void testWriteEventAtMostOnce()
     {
-        final MqttEventVertice mqttEvents = new MqttEventVertice(mqtt, eventCodec, timerProvider);
+        final MqttEventVertice mqttEvents = new MqttEventVertice(mqtt, messageCodecs, timerProvider);
         mqttEvents.start(future());
         final Channel<UUID> channel = mqttEvents.channel(
             "channel", new ChannelOptions().setCodecName("UUID").setQuality(AT_MOST_ONCE));
         final UUID value = randomUUID();
         channel.producer().write(value);
         verify(mqtt).publish(eq("channel"), bufferCaptor.capture(), eq(MqttQoS.AT_MOST_ONCE), eq(false), eq(false));
-        assertEquals(eventCodec.decodeFromWire(bufferCaptor.getValue(), caseInsensitiveMultiMap()), value);
+        assertEquals(messageCodecs.decode(bufferCaptor.getValue(), caseInsensitiveMultiMap(), "UUID"), value);
     }
 
     @Test public void testWriteEventPreStart()
     {
-        final MqttEventVertice mqttEvents = new MqttEventVertice(mqtt, eventCodec, timerProvider);
+        final MqttEventVertice mqttEvents = new MqttEventVertice(mqtt, messageCodecs, timerProvider);
         final Channel<UUID> channel = mqttEvents.channel(
             "channel", new ChannelOptions().setCodecName("UUID").setQuality(AT_MOST_ONCE));
         final UUID value = randomUUID();
         channel.producer().write(value);
         mqttEvents.start(future());
         verify(mqtt).publish(eq("channel"), bufferCaptor.capture(), eq(MqttQoS.AT_MOST_ONCE), eq(false), eq(false));
-        assertEquals(eventCodec.decodeFromWire(bufferCaptor.getValue(), caseInsensitiveMultiMap()), value);
+        assertEquals(messageCodecs.decode(bufferCaptor.getValue(), caseInsensitiveMultiMap(), "UUID"), value);
     }
 
     @Test public void testWriteEventAtLeastOnce()
     {
-        final MqttEventVertice mqttEvents = new MqttEventVertice(mqtt, eventCodec, timerProvider);
+        final MqttEventVertice mqttEvents = new MqttEventVertice(mqtt, messageCodecs, timerProvider);
         final Set<Object> sentMessages = new HashSet<>();
         mqttEvents.start(future());
         final Channel<UUID> channel = mqttEvents.<UUID>channel(
@@ -198,7 +196,7 @@ public class MqttEventVerticeTest
         producer.setWriteQueueMaxSize(1).write(value);
         verify(mqtt).publish(eq("channel"), bufferCaptor.capture(), eq(MqttQoS.AT_LEAST_ONCE),
                              eq(false), eq(false), publishSentCaptor.capture());
-        assertEquals(eventCodec.decodeFromWire(bufferCaptor.getValue(), caseInsensitiveMultiMap()), value);
+        assertEquals(messageCodecs.decode(bufferCaptor.getValue(), caseInsensitiveMultiMap(), "UUID"), value);
         publishSentCaptor.getValue().handle(succeededFuture(1));
         assertFalse(sentMessages.contains(value));
         assertTrue(producer.writeQueueFull());

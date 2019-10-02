@@ -11,12 +11,12 @@
 
     <groupId>org.m-ld</groupId>
     <artifactId>guicicle</artifactId>
-    <version>0.1.7</version>
+    <version>0.1.8</version>
 
     <properties>
         <guice.version>4.2.2</guice.version>
         <vertx.version>3.8.1</vertx.version>
-        <jackson.version>2.9.9</jackson.version>
+        <jackson.version>2.9.10</jackson.version>
     </properties>
 
     <repositories>

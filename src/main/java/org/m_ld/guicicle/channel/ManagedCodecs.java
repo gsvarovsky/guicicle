@@ -3,7 +3,7 @@
  * Licensed under the MIT License. See LICENSE file in the project root for full license information.
  */
 
-package org.m_ld.guicicle.mqtt;
+package org.m_ld.guicicle.channel;
 
 import com.google.inject.Inject;
 import io.vertx.core.MultiMap;
@@ -18,23 +18,22 @@ import static io.netty.util.CharsetUtil.UTF_8;
 import static io.vertx.core.buffer.Buffer.buffer;
 
 /**
- * Not strictly a {@link MessageCodec}, but similarly used to encode and decode MQTT events as published by the {@link
- * MqttEventVertice}.
+ * Uses a Vert.x Codec Manager to encode and decode messages.
  * <p>
  * The full encoding includes the payload encoding codec identity for decoding at the consumer. This is the system codec
  * ID (-1 for a non-system codec) and the codec name. The available codecs at the consumer must tally with those at the
  * producer, or have a suitable translation.
  */
-public class MqttEventCodec
+public class ManagedCodecs implements MessageCodecs
 {
     private final CodecManager codecManager;
 
-    @Inject public MqttEventCodec(CodecManager codecManager)
+    @Inject public ManagedCodecs(CodecManager codecManager)
     {
         this.codecManager = codecManager;
     }
 
-    public Buffer encodeToWire(Object body, DeliveryOptions options)
+    @Override public Buffer encode(Object body, DeliveryOptions options)
     {
         final MessageCodec codec = codecManager.lookupCodec(body, options.getCodecName());
         class Encoder
@@ -87,7 +86,7 @@ public class MqttEventCodec
         return new Encoder().encode();
     }
 
-    public Object decodeFromWire(Buffer payload, MultiMap headers)
+    @Override public Object decode(Buffer payload, MultiMap headers, String codecHint)
     {
         class Decoder
         {

@@ -28,6 +28,8 @@ import org.junit.runner.RunWith;
 import org.m_ld.guicicle.Guicicle;
 import org.m_ld.guicicle.Vertice;
 import org.m_ld.guicicle.channel.ChannelProvider;
+import org.m_ld.guicicle.channel.ManagedCodecs;
+import org.m_ld.guicicle.channel.MessageCodecs;
 
 import java.io.IOException;
 import java.util.concurrent.atomic.AtomicReference;
@@ -40,13 +42,18 @@ public abstract class VertxMqttWithBrokerTest
 {
     @ClassRule public static RunTestOnContext rule = new RunTestOnContext();
     private static Server mqttBroker;
-
     static final AtomicReference<Future<MqttPublishMessage>> published = new AtomicReference<>();
-    static final MqttEventCodec EVENT_CODEC = new MqttEventCodec(new CodecManager());
+    static final MessageCodecs EVENT_CODEC = new ManagedCodecs(new CodecManager());
 
     @SuppressWarnings("WeakerAccess") public static class TestModule extends VertxMqttModule
     {
         private static final AtomicReference<Consumer<ChannelProvider>> test = new AtomicReference<>();
+
+        @Override protected void configure()
+        {
+            super.configure();
+            bind(MessageCodecs.class).to(ManagedCodecs.class);
+        }
 
         @ProvidesIntoSet Vertice puppeteerVertice(@ChannelProvider.Central ChannelProvider channels, EventBus eventBus)
         {
