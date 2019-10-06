@@ -11,6 +11,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /**
  * A "Vert(.x Serv)ice" is an injectable Verticle-like singleton that is {@link #start}ed and {@link #stop}ped from a
@@ -111,19 +112,19 @@ public interface Vertice
      * Converts a Vert.x future to a Java util completion stage. The returned stage will be completed on the Vert.x
      * event thread.
      *
-     * @param future the Vert.x future
-     * @param <T>    the result type
+     * @param supplyFuture supplies the Vert.x future. This supplier will be called on the event thread.
+     * @param <T>          the result type
      * @return a Java util completion stage
      */
-    static <T> CompletionStage<T> fromFuture(Future<T> future)
+    static <T> CompletionStage<T> fromFuture(Supplier<Future<T>> supplyFuture, Vertx vertx)
     {
         final CompletableFuture<T> completableFuture = new CompletableFuture<>();
-        future.setHandler(result -> {
+        vertx.runOnContext(v -> supplyFuture.get().setHandler(result -> {
             if (result.succeeded())
                 completableFuture.complete(result.result());
             else
                 completableFuture.completeExceptionally(result.cause());
-        });
+        }));
         return completableFuture;
     }
 
@@ -133,7 +134,7 @@ public interface Vertice
      *
      * @param stage the Java util completion stage
      * @param vertx the Vert.x instance
-     * @param <T> the result type
+     * @param <T>   the result type
      * @return a Vert.x future
      */
     static <T> Future<T> toFuture(CompletionStage<T> stage, Vertx vertx)
