@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  ~ Copyright (c) George Svarovsky 2019. All rights reserved.
+  ~ Copyright (c) George Svarovsky 2020. All rights reserved.
   ~ Licensed under the MIT License. See LICENSE file in the project root for full license information.
   -->
 
@@ -11,7 +11,7 @@
 
     <groupId>org.m-ld</groupId>
     <artifactId>guicicle</artifactId>
-    <version>0.1.9</version>
+    <version>0.1.10</version>
 
     <properties>
         <guice.version>4.2.2</guice.version>
@@ -93,7 +93,7 @@
             <!-- TODO: Switch back to moquette master when a release >0.12 appears -->
             <groupId>com.github.j-n-k</groupId>
             <artifactId>moquette-broker</artifactId>
-            <version>0.13.0.OH2</version>
+            <version>0.13.0.OH3</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

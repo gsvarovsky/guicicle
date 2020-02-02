@@ -1,5 +1,5 @@
 /*
- * Copyright (c) George Svarovsky 2019. All rights reserved.
+ * Copyright (c) George Svarovsky 2020. All rights reserved.
  * Licensed under the MIT License. See LICENSE file in the project root for full license information.
  */
 
@@ -29,6 +29,7 @@ import org.m_ld.guicicle.mqtt.MqttConsumer.Subscription;
 import java.util.*;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.logging.Logger;
 
 import static io.vertx.core.Future.failedFuture;
 import static io.vertx.core.Future.succeededFuture;
@@ -48,6 +49,7 @@ import static org.m_ld.guicicle.mqtt.MqttConsumer.Subscription.isComplete;
  */
 public class MqttEventVertice implements ChannelProvider, Vertice, MqttEventClient
 {
+    private static final Logger LOG = Logger.getLogger(MqttEventVertice.class.getName());
     static final Map<ChannelOptions.Quality, MqttQoS> MQTT_QOS = new HashMap<>();
 
     static
@@ -338,10 +340,22 @@ public class MqttEventVertice implements ChannelProvider, Vertice, MqttEventClie
 
     private void onMessage(MqttPublishMessage msg)
     {
+        boolean consumed = false;
         for (MqttConsumer consumer : consumers)
+        {
             for (Subscription subscription : consumer.subscriptions())
+            {
                 if (subscription.address.match(msg.topicName()).isPresent())
+                {
                     consumer.onMessage(msg, subscription);
+                    consumed = true;
+                }
+            }
+        }
+        if (consumed)
+            LOG.fine(format("<%s> Consumed message on %s", clientId(), msg.topicName()));
+        else
+            LOG.warning(format("<%s> Suspicious unconsumed message on %s", clientId(), msg.topicName()));
     }
 
     private void onPublishComplete(Integer msgId)

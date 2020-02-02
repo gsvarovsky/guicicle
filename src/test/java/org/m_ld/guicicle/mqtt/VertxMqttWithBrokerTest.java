@@ -1,5 +1,5 @@
 /*
- * Copyright (c) George Svarovsky 2019. All rights reserved.
+ * Copyright (c) George Svarovsky 2020. All rights reserved.
  * Licensed under the MIT License. See LICENSE file in the project root for full license information.
  */
 
@@ -84,14 +84,12 @@ public abstract class VertxMqttWithBrokerTest
             mqttBroker = new Server();
             mqttBroker.startServer(classPathConfig, singletonList(new AbstractInterceptHandler()
             {
-                @Override
-                public String getID()
+                @Override public String getID()
                 {
                     return "ServerPublishListener";
                 }
 
-                @Override
-                public void onPublish(InterceptPublishMessage msg)
+                @Override public void onPublish(InterceptPublishMessage msg)
                 {
                     published.get().complete(MqttPublishMessage.create(
                         -1, msg.getQos(), msg.isDupFlag(), msg.isRetainFlag(),

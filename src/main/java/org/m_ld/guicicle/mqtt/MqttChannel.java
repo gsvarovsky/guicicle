@@ -1,5 +1,5 @@
 /*
- * Copyright (c) George Svarovsky 2019. All rights reserved.
+ * Copyright (c) George Svarovsky 2020. All rights reserved.
  * Licensed under the MIT License. See LICENSE file in the project root for full license information.
  */
 
@@ -23,6 +23,7 @@ import org.m_ld.guicicle.mqtt.MqttDirectAddress.MqttSendAddress;
 
 import java.util.*;
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.logging.Logger;
 
 import static io.vertx.core.Future.failedFuture;
 import static io.vertx.core.Future.succeededFuture;
@@ -40,6 +41,7 @@ import static org.m_ld.guicicle.mqtt.MqttTopicAddress.pattern;
 
 class MqttChannel<T> extends AbstractChannel<T>
 {
+    private static final Logger LOG = Logger.getLogger(MqttChannel.class.getName());
     private final MqttEventClient mqttEventClient;
     private final MqttTopicAddress topicAddress;
     private final MqttChannelReplier replier;
@@ -153,11 +155,12 @@ class MqttChannel<T> extends AbstractChannel<T>
 
         void write(String address, MqttEventInFlight<M> wif, @Nullable DeliveryOptions options)
         {
+            LOG.fine(format("<%s> Producing message on %s: %s", mqttEventClient.clientId(), address, wif.message));
             mqttEventClient
                 .publish(address, wif.message, options(options))
                 .setHandler(published -> {
                     if (published.succeeded())
-                        if (published.result() == null)
+                        if (published.result() == null) // QoS = 0
                             onProduced(wif);
                         else
                             writesInFlight.put(published.result(), wif);
@@ -520,6 +523,8 @@ class MqttChannel<T> extends AbstractChannel<T>
             final MultiMap headers = MultiMap.caseInsensitiveMultiMap();
             //noinspection unchecked
             final T payload = (T)mqttEventClient.decodeFromWire(message, headers, options().getCodecName());
+            LOG.fine(
+                format("<%s> Consuming message on %s: %s", mqttEventClient.clientId(), subscription.address, payload));
             final MqttEventMessage<T> eventMessage;
             if (subscription == sendSub)
                 eventMessage = new MqttEventMessage<>(
