@@ -16,7 +16,7 @@
     <properties>
         <guice.version>4.2.2</guice.version>
         <vertx.version>3.8.1</vertx.version>
-        <jackson.version>2.9.10</jackson.version>
+        <jackson.version>2.9.10.3</jackson.version>
     </properties>
 
     <repositories>
