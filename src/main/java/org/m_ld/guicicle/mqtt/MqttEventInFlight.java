@@ -1,5 +1,5 @@
 /*
- * Copyright (c) George Svarovsky 2019. All rights reserved.
+ * Copyright (c) George Svarovsky 2020. All rights reserved.
  * Licensed under the MIT License. See LICENSE file in the project root for full license information.
  */
 
@@ -20,16 +20,16 @@ class MqttEventInFlight<T>
     // Only send messages have a message Id
     final String messageId;
     // Only sent messages have a reply handler
-    final Handler<AsyncResult<Message>> replyHandler;
+    final Handler<AsyncResult<Message<?>>> replyHandler;
     final Handler<AsyncResult<Void>> producedHandler;
     final long time = System.currentTimeMillis();
 
-    MqttEventInFlight(T message, Handler<? extends AsyncResult<? extends Message>> replyHandler)
+    MqttEventInFlight(T message, Handler<? extends AsyncResult<? extends Message<?>>> replyHandler)
     {
         this.message = message;
         this.messageId = generateRandomId();
         //noinspection unchecked
-        this.replyHandler = (Handler<AsyncResult<Message>>)replyHandler;
+        this.replyHandler = (Handler<AsyncResult<Message<?>>>)replyHandler;
         this.producedHandler = null;
     }
 

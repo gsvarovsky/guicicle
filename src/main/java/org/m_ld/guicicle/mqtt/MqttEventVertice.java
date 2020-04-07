@@ -152,8 +152,8 @@ public class MqttEventVertice implements ChannelProvider, Vertice, MqttEventClie
 
     @Override public <T> Channel<T> channel(String address, ChannelOptions options)
     {
-        if (options.getDelivery() == Delivery.SEND)
-            checkCanSend();
+        if (options.getDelivery() == Delivery.SEND && (presence == null || !options.hasPresence()))
+            throw new UnsupportedOperationException("Send with MQTT requires presence");
 
         return new MqttChannel<>(this, address, options);
     }
@@ -186,7 +186,11 @@ public class MqttEventVertice implements ChannelProvider, Vertice, MqttEventClie
 
     @Override public Future<Integer> publish(String topic, Object event, ChannelOptions options)
     {
-        return publish(topic, messageCodecs.encode(event, options), options.getQuality(), false, false);
+        return publish(topic,
+                       messageCodecs.encode(event, options),
+                       options.getQuality(),
+                       false,
+                       options.isRetain());
     }
 
     @Override public Future<Integer> publish(
@@ -252,12 +256,6 @@ public class MqttEventVertice implements ChannelProvider, Vertice, MqttEventClie
     @Override public boolean isConnected()
     {
         return connected;
-    }
-
-    private void checkCanSend()
-    {
-        if (presence == null)
-            throw new UnsupportedOperationException("Send with MQTT requires presence");
     }
 
     private void subscribeNow(Iterable<MqttConsumer> consumers)

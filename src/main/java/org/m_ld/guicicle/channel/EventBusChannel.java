@@ -1,5 +1,5 @@
 /*
- * Copyright (c) George Svarovsky 2019. All rights reserved.
+ * Copyright (c) George Svarovsky 2020. All rights reserved.
  * Licensed under the MIT License. See LICENSE file in the project root for full license information.
  */
 
@@ -162,6 +162,8 @@ public class EventBusChannel<T> extends AbstractChannel<T>
             final ChannelOptions newOptions = (ChannelOptions)options;
             if (newOptions.getQuality() != ChannelOptions.Quality.AT_MOST_ONCE)
                 throw new UnsupportedOperationException("EventBus does not support quality of service");
+            if (newOptions.isRetain())
+                throw new UnsupportedOperationException("EventBus does not support message retention");
             if (oldOptions != null && oldOptions.getDelivery() != newOptions.getDelivery())
                 throw new UnsupportedOperationException("EventBus channel cannot change delivery option");
         }

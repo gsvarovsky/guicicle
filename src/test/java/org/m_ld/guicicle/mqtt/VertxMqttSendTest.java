@@ -1,5 +1,5 @@
 /*
- * Copyright (c) George Svarovsky 2019. All rights reserved.
+ * Copyright (c) George Svarovsky 2020. All rights reserved.
  * Licensed under the MIT License. See LICENSE file in the project root for full license information.
  */
 
@@ -17,8 +17,7 @@ import org.m_ld.guicicle.channel.ChannelOptions;
 
 import java.io.IOException;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.*;
 
 public class VertxMqttSendTest extends VertxMqttWithBrokerTest
 {
@@ -27,12 +26,34 @@ public class VertxMqttSendTest extends VertxMqttWithBrokerTest
         VertxMqttWithBrokerTest.setUp(context, new JsonObject().put("presence.domain", "test"));
     }
 
+    private static ChannelOptions sendOptions()
+    {
+        return new ChannelOptions().setPresence(true).setSendTimeout(1000);
+    }
+
+    @Test public void cannotSetSendWithoutPresence(TestContext context)
+    {
+        final Async done = context.async();
+        TestModule.run(channels -> {
+            try
+            {
+                channels.channel("cannotSetSendWithoutPresence",
+                                 new ChannelOptions().setDelivery(ChannelOptions.Delivery.SEND));
+                fail();
+            }
+            catch (UnsupportedOperationException ignored)
+            {
+                done.complete();
+            }
+        });
+    }
+
     @Test public void testSendStringToSelf(TestContext context)
     {
         final Async done = context.async();
         TestModule.run(channels -> {
             final Channel<String> channel = channels.channel("testSendStringToSelf",
-                                                             new ChannelOptions().setEcho(true));
+                                                             sendOptions().setEcho(true));
             channel.consumer()
                 .handler(msg -> {
                     assertEquals("Hello", msg.body());
@@ -50,8 +71,8 @@ public class VertxMqttSendTest extends VertxMqttWithBrokerTest
         final Async done = context.async();
         TestModule.run(channels -> {
             final Channel<String>
-                channel1 = channels.channel("testSendStringToNonSelf", new ChannelOptions().setEcho(false)),
-                channel2 = channels.channel("testSendStringToNonSelf", new ChannelOptions());
+                channel1 = channels.channel("testSendStringToNonSelf", sendOptions().setEcho(false)),
+                channel2 = channels.channel("testSendStringToNonSelf", sendOptions());
             final Future<Void> channel1Connected = Future.future(), channel2Connected = Future.future();
 
             channel1.consumer()
@@ -76,8 +97,8 @@ public class VertxMqttSendTest extends VertxMqttWithBrokerTest
         final Async done = context.async();
         TestModule.run(channels -> {
             final Channel<String>
-                channel1 = channels.channel("testSendStringRoundRobin", new ChannelOptions().setEcho(true)),
-                channel2 = channels.channel("testSendStringRoundRobin", new ChannelOptions());
+                channel1 = channels.channel("testSendStringRoundRobin", sendOptions().setEcho(true)),
+                channel2 = channels.channel("testSendStringRoundRobin", sendOptions());
             final Future<Void>
                 channel1Connected = Future.future(), channel2Connected = Future.future(),
                 channel1Received = Future.future(), channel2Received = Future.future();
@@ -106,7 +127,7 @@ public class VertxMqttSendTest extends VertxMqttWithBrokerTest
         final Async done = context.async();
         TestModule.run(channels -> {
             final Channel<String> channel = channels.channel("testReplyToSelf",
-                                                             new ChannelOptions().setEcho(true));
+                                                             sendOptions().setEcho(true));
             channel.consumer()
                 .handler(msg -> msg.reply("World"))
                 // Write the message when the consumer has been registered
@@ -125,7 +146,7 @@ public class VertxMqttSendTest extends VertxMqttWithBrokerTest
         final Async done = context.async();
         TestModule.run(channels -> {
             final Channel<String> channel = channels.channel("testReplyToReply",
-                                                             new ChannelOptions().setEcho(true));
+                                                             sendOptions().setEcho(true));
             channel.consumer()
                 .handler(msg -> msg.reply("World", context.asyncAssertSuccess(reply -> {
                     assertEquals("!", reply.body());

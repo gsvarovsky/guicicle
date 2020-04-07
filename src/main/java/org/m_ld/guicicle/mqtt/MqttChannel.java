@@ -43,7 +43,7 @@ class MqttChannel<T> extends AbstractChannel<T>
 {
     private static final Logger LOG = Logger.getLogger(MqttChannel.class.getName());
     private final MqttEventClient mqttEventClient;
-    private final MqttTopicAddress topicAddress;
+    private final MqttTopicAddress<?> topicAddress;
     private final MqttChannelReplier replier;
     private final Handlers<AsyncResult<Object>> producedHandlers = new Handlers<>();
 
@@ -77,7 +77,7 @@ class MqttChannel<T> extends AbstractChannel<T>
         return consumer;
     }
 
-    @Override protected @NotNull MessageProducer<T> createProducer()
+    @NotNull @Override protected MessageProducer<T> createProducer()
     {
         final MqttChannelProducer producer = new MqttChannelProducer();
         mqttEventClient.addProducer(producer);
@@ -240,7 +240,7 @@ class MqttChannel<T> extends AbstractChannel<T>
         final Subscription[] subscriptions = new Subscription[]{
             new Subscription(REPLY_ADDRESS.toId(channelId()), options().getQuality())
         };
-        final Map<String, Handler<AsyncResult<Message>>> repliesInFlight = new HashMap<>();
+        final Map<String, Handler<AsyncResult<Message<?>>>> repliesInFlight = new HashMap<>();
 
         @Override public Subscription[] subscriptions()
         {
@@ -251,7 +251,8 @@ class MqttChannel<T> extends AbstractChannel<T>
         {
             // Received a reply to this channel, find a reply handler.
             final MqttReplyAddress repliedAddress = new MqttReplyAddress(message.topicName());
-            final Handler<AsyncResult<Message>> replyHandler = repliesInFlight.remove(repliedAddress.sentMessageId());
+            final Handler<AsyncResult<Message<?>>> replyHandler = repliesInFlight.remove(
+                repliedAddress.sentMessageId());
             if (replyHandler != null)
             {
                 final MultiMap headers = MultiMap.caseInsensitiveMultiMap();
@@ -277,7 +278,7 @@ class MqttChannel<T> extends AbstractChannel<T>
             super.close();
         }
 
-        MqttEventMessage.Replier create(MqttDirectAddress sentAddress)
+        MqttEventMessage.Replier create(MqttDirectAddress<?> sentAddress)
         {
             return new MqttEventMessage.Replier()
             {
@@ -401,7 +402,7 @@ class MqttChannel<T> extends AbstractChannel<T>
         @Override public void onConnected()
         {
             // Drain down the queue
-            final ArrayList<MqttEventInFlight> messages = new ArrayList<>(writesInFlight.values());
+            final ArrayList<MqttEventInFlight<T>> messages = new ArrayList<>(writesInFlight.values());
             writesInFlight.clear();
             messages.forEach(this::write);
         }
@@ -412,7 +413,7 @@ class MqttChannel<T> extends AbstractChannel<T>
         final Subscription
             publishSub = new Subscription(topicAddress, options().getQuality()),
             sendSub = new Subscription(SEND_ADDRESS.toId(channelId()).topic(address()), options().getQuality());
-        final Subscription[] subscriptions = mqttEventClient.presence().isPresent() ?
+        final Subscription[] subscriptions = options().hasPresence() ?
             new Subscription[]{publishSub, sendSub} : new Subscription[]{publishSub};
         final Handlers<Message<T>> messageHandlers = new Handlers<>();
         final Handlers<AsyncResult<Void>>
@@ -549,8 +550,11 @@ class MqttChannel<T> extends AbstractChannel<T>
 
         @Override public void onSubscribe(AsyncResult<Void> subscribeResult)
         {
-            final Optional<MqttPresence> presence = mqttEventClient.presence();
-            if (subscribeResult.succeeded() && presence.isPresent()) // Announce our presence
+            final Optional<MqttPresence> presence;
+            if (subscribeResult.succeeded() &&
+                options().hasPresence() &&
+                (presence = mqttEventClient.presence()).isPresent())
+                // Announce our presence
                 presence.get().join(channelId(), address(), subscribeHandlers);
             else
                 subscribeHandlers.handle(subscribeResult);
@@ -564,6 +568,7 @@ class MqttChannel<T> extends AbstractChannel<T>
         @Override public void close()
         {
             mqttEventClient.presence()
+                .filter(presence -> options().hasPresence())
                 .map(presence -> when(presence::leave, channelId()))
                 .orElse(succeededFuture()).setHandler(v -> {
                 unregister();

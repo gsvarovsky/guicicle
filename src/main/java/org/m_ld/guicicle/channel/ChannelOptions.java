@@ -1,5 +1,5 @@
 /*
- * Copyright (c) George Svarovsky 2019. All rights reserved.
+ * Copyright (c) George Svarovsky 2020. All rights reserved.
  * Licensed under the MIT License. See LICENSE file in the project root for full license information.
  */
 
@@ -33,7 +33,7 @@ public class ChannelOptions extends DeliveryOptions implements ResponseStatusMap
     private Delivery delivery = Delivery.PUBLISH;
     private Quality quality = Quality.AT_MOST_ONCE;
     private Map<String, HttpResponseStatus> statuses = new HashMap<>();
-    private boolean echo = false;
+    private boolean echo = false, retain = false, presence = false;
     private int bufferSize = 128;
 
     public ChannelOptions()
@@ -47,6 +47,8 @@ public class ChannelOptions extends DeliveryOptions implements ResponseStatusMap
         this.quality = other.quality;
         this.statuses.putAll(other.statuses);
         this.echo = other.echo;
+        this.retain = other.retain;
+        this.presence = other.presence;
         this.bufferSize = other.bufferSize;
     }
 
@@ -62,6 +64,10 @@ public class ChannelOptions extends DeliveryOptions implements ResponseStatusMap
                 toMap(Map.Entry::getKey, e -> HttpResponseStatus.parseLine(e.getValue().toString()))));
         if (json.containsKey("echo"))
             this.echo = json.getBoolean("echo");
+        if (json.containsKey("retain"))
+            this.retain = json.getBoolean("retain");
+        if (json.containsKey("presence"))
+            this.presence = json.getBoolean("presence");
         if (json.containsKey("bufferSize"))
             this.bufferSize = json.getInteger("bufferSize");
     }
@@ -108,6 +114,28 @@ public class ChannelOptions extends DeliveryOptions implements ResponseStatusMap
     public ChannelOptions setEcho(boolean echo)
     {
         this.echo = echo;
+        return this;
+    }
+
+    public boolean isRetain()
+    {
+        return retain;
+    }
+
+    public ChannelOptions setRetain(boolean retain)
+    {
+        this.retain = retain;
+        return this;
+    }
+
+    public boolean hasPresence()
+    {
+        return presence;
+    }
+
+    public ChannelOptions setPresence(boolean presence)
+    {
+        this.presence = presence;
         return this;
     }
 
@@ -164,6 +192,8 @@ public class ChannelOptions extends DeliveryOptions implements ResponseStatusMap
             setQuality(channelOptions.getQuality());
             setStatusForError(channelOptions.statuses);
             setEcho(channelOptions.isEcho());
+            setRetain(channelOptions.isRetain());
+            setPresence(channelOptions.hasPresence());
             setBufferSize(channelOptions.getBufferSize());
         }
         return this;
@@ -178,6 +208,8 @@ public class ChannelOptions extends DeliveryOptions implements ResponseStatusMap
             json.put("statuses", new JsonObject(statuses.entrySet().stream().collect(
                 toMap(Map.Entry::getKey, e -> e.getValue().toString()))));
         json.put("echo", echo);
+        json.put("retain", retain);
+        json.put("presence", presence);
         json.put("bufferSize", bufferSize);
         return json;
     }
