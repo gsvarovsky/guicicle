@@ -1,5 +1,5 @@
 /*
- * Copyright (c) George Svarovsky 2019. All rights reserved.
+ * Copyright (c) George Svarovsky 2020. All rights reserved.
  * Licensed under the MIT License. See LICENSE file in the project root for full license information.
  */
 
@@ -36,7 +36,7 @@ public abstract class MqttTopicAddress<T extends MqttTopicAddress<T>> extends Ab
         }
     }
 
-    public static MqttTopicAddress pattern(String pattern)
+    public static MqttTopicAddress<?> pattern(String pattern)
     {
         return new BasicMqttTopicAddress(pattern);
     }

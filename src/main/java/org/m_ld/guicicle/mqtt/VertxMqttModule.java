@@ -1,5 +1,5 @@
 /*
- * Copyright (c) George Svarovsky 2019. All rights reserved.
+ * Copyright (c) George Svarovsky 2020. All rights reserved.
  * Licensed under the MIT License. See LICENSE file in the project root for full license information.
  */
 
@@ -18,11 +18,14 @@ import org.m_ld.guicicle.channel.ChannelProvider;
 import org.m_ld.guicicle.channel.ChannelProvider.Central;
 
 import java.util.Random;
+import java.util.logging.Logger;
 
 import static java.lang.String.format;
 
 public class VertxMqttModule extends AbstractModule
 {
+    private static final Logger LOG = Logger.getLogger(VertxMqttModule.class.getName());
+
     /**
      * @return a 128-bit random unique client identifier
      */
@@ -47,6 +50,23 @@ public class VertxMqttModule extends AbstractModule
             options.setClientId(clientId);
             if (options.getWillTopic() != null)
                 options.setWillTopic(options.getWillTopic().replace("{clientId}", clientId));
+        }
+        // If the options request presence, then set up a LWT if possible
+        if (mqttOptions.containsKey("presence"))
+        {
+            if (options.getClientId() == null || options.getClientId().isEmpty())
+            {
+                LOG.warning("No client Id available, presence may be unreliable");
+            }
+            else if (options.isWillFlag())
+            {
+                LOG.warning("LWT already specified, presence may be unreliable");
+            }
+            else
+            {
+                final String domain = mqttOptions.getJsonObject("presence").getString("domain");
+                MqttPresence.setWill(options, domain, options.getClientId());
+            }
         }
         return options;
     }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) George Svarovsky 2019. All rights reserved.
+ * Copyright (c) George Svarovsky 2020. All rights reserved.
  * Licensed under the MIT License. See LICENSE file in the project root for full license information.
  */
 
@@ -7,6 +7,8 @@ package org.m_ld.guicicle.mqtt;
 
 import io.vertx.core.AsyncResult;
 import io.vertx.core.buffer.Buffer;
+import io.vertx.core.json.Json;
+import io.vertx.core.json.JsonObject;
 import io.vertx.mqtt.messages.MqttPublishMessage;
 import org.junit.Before;
 import org.junit.Test;
@@ -21,7 +23,6 @@ import static java.util.Collections.emptySet;
 import static java.util.Collections.singleton;
 import static org.junit.Assert.*;
 import static org.m_ld.guicicle.channel.ChannelOptions.Quality.AT_LEAST_ONCE;
-import static org.m_ld.guicicle.channel.ChannelOptions.Quality.AT_MOST_ONCE;
 import static org.mockito.Mockito.*;
 
 @RunWith(MockitoJUnitRunner.class) public class MqttPresenceTest
@@ -50,8 +51,8 @@ import static org.mockito.Mockito.*;
     @Test public void testJoin()
     {
         final AtomicReference<AsyncResult<Void>> joined = new AtomicReference<>();
-        when(mqtt.publish("__presence/domain/client1/channel1",
-                          Buffer.buffer("address"),
+        when(mqtt.publish("__presence/domain/client1",
+                          Json.encodeToBuffer(new JsonObject().put("channel1", "address")),
                           AT_LEAST_ONCE,
                           false,
                           true)).thenReturn(succeededFuture(1));
@@ -67,8 +68,8 @@ import static org.mockito.Mockito.*;
         presence.join("channel1", "address", joined::set);
         assertNull(joined.get());
 
-        when(mqtt.publish("__presence/domain/client1/channel1",
-                          Buffer.buffer("address"),
+        when(mqtt.publish("__presence/domain/client1",
+                          Json.encodeToBuffer(new JsonObject().put("channel1", "address")),
                           AT_LEAST_ONCE,
                           false,
                           true)).thenReturn(succeededFuture(1));
@@ -80,11 +81,11 @@ import static org.mockito.Mockito.*;
     @Test public void testLeave()
     {
         final AtomicReference<AsyncResult<Void>> left = new AtomicReference<>();
-        when(mqtt.publish("__presence/domain/client1/channel1",
-                          Buffer.buffer("-"),
-                          AT_MOST_ONCE,
+        when(mqtt.publish("__presence/domain/client1",
+                          Buffer.buffer(),
+                          AT_LEAST_ONCE,
                           false,
-                          false)).thenReturn(succeededFuture());
+                          true)).thenReturn(succeededFuture());
         presence.leave("channel1", left::set);
         assertTrue(left.get().succeeded());
     }
@@ -99,8 +100,8 @@ import static org.mockito.Mockito.*;
     @Test public void testConsumeConsumerConnectedMessage()
     {
         final MqttPublishMessage msg = mock(MqttPublishMessage.class);
-        when(msg.topicName()).thenReturn("__presence/domain/client1/channel1");
-        when(msg.payload()).thenReturn(Buffer.buffer("address"));
+        when(msg.topicName()).thenReturn("__presence/domain/client1");
+        when(msg.payload()).thenReturn(Json.encodeToBuffer(new JsonObject().put("channel1", "address")));
         presence.onMessage(msg, presence.subscriptions()[0]);
         assertEquals(singleton("channel1"), presence.present("address"));
     }
@@ -108,8 +109,8 @@ import static org.mockito.Mockito.*;
     @Test public void testPresenceMatchesAddress()
     {
         final MqttPublishMessage msg = mock(MqttPublishMessage.class);
-        when(msg.topicName()).thenReturn("__presence/domain/client1/channel1");
-        when(msg.payload()).thenReturn(Buffer.buffer("#"));
+        when(msg.topicName()).thenReturn("__presence/domain/client1");
+        when(msg.payload()).thenReturn(Json.encodeToBuffer(new JsonObject().put("channel1", "#")));
         presence.onMessage(msg, presence.subscriptions()[0]);
         assertEquals(singleton("channel1"), presence.present("address"));
     }
@@ -117,8 +118,8 @@ import static org.mockito.Mockito.*;
     @Test public void testConsumeUnknownConsumerDisconnectedMessage()
     {
         final MqttPublishMessage msg = mock(MqttPublishMessage.class);
-        when(msg.topicName()).thenReturn("__presence/domain/client1/channel1");
-        when(msg.payload()).thenReturn(Buffer.buffer("-"));
+        when(msg.topicName()).thenReturn("__presence/domain/client1");
+        when(msg.payload()).thenReturn(Buffer.buffer());
         presence.onMessage(msg, presence.subscriptions()[0]);
         assertEquals(emptySet(), presence.present("address"));
     }
@@ -126,10 +127,10 @@ import static org.mockito.Mockito.*;
     @Test public void testConsumeKnownConsumerDisconnectedMessage()
     {
         final MqttPublishMessage msg1 = mock(MqttPublishMessage.class), msg2 = mock(MqttPublishMessage.class);
-        when(msg1.topicName()).thenReturn("__presence/domain/client1/channel1");
-        when(msg1.payload()).thenReturn(Buffer.buffer("address"));
-        when(msg2.topicName()).thenReturn("__presence/domain/client1/channel1");
-        when(msg2.payload()).thenReturn(Buffer.buffer("-"));
+        when(msg1.topicName()).thenReturn("__presence/domain/client1");
+        when(msg1.payload()).thenReturn(Json.encodeToBuffer(new JsonObject().put("channel1", "address")));
+        when(msg2.topicName()).thenReturn("__presence/domain/client1");
+        when(msg2.payload()).thenReturn(Buffer.buffer());
         presence.onMessage(msg1, presence.subscriptions()[0]);
         presence.onMessage(msg2, presence.subscriptions()[0]);
         assertEquals(emptySet(), presence.present("address"));
@@ -138,10 +139,10 @@ import static org.mockito.Mockito.*;
     @Test public void testConsumeClientLwtMessage()
     {
         final MqttPublishMessage msg1 = mock(MqttPublishMessage.class), msg2 = mock(MqttPublishMessage.class);
-        when(msg1.topicName()).thenReturn("__presence/domain/client1/channel1");
-        when(msg1.payload()).thenReturn(Buffer.buffer("address"));
+        when(msg1.topicName()).thenReturn("__presence/domain/client1");
+        when(msg1.payload()).thenReturn(Json.encodeToBuffer(new JsonObject().put("channel1", "address")));
         when(msg2.topicName()).thenReturn("__presence/domain/client1");
-        when(msg2.payload()).thenReturn(Buffer.buffer("-"));
+        when(msg2.payload()).thenReturn(Buffer.buffer());
         presence.onMessage(msg1, presence.subscriptions()[0]);
         presence.onMessage(msg2, presence.subscriptions()[0]);
         assertEquals(emptySet(), presence.present("address"));

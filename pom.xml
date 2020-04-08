@@ -11,12 +11,11 @@
 
     <groupId>org.m-ld</groupId>
     <artifactId>guicicle</artifactId>
-    <version>0.2.0</version>
+    <version>0.3.0</version>
 
     <properties>
         <guice.version>4.2.2</guice.version>
-        <vertx.version>3.8.1</vertx.version>
-        <jackson.version>2.9.10</jackson.version>
+        <vertx.version>3.9.0</vertx.version>
     </properties>
 
     <repositories>
@@ -59,12 +58,6 @@
             <groupId>com.google.inject.extensions</groupId>
             <artifactId>guice-multibindings</artifactId>
             <version>${guice.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-databind</artifactId>
-            <version>${jackson.version}</version>
-            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>org.jetbrains</groupId>

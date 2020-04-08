@@ -1,5 +1,5 @@
 /*
- * Copyright (c) George Svarovsky 2019. All rights reserved.
+ * Copyright (c) George Svarovsky 2020. All rights reserved.
  * Licensed under the MIT License. See LICENSE file in the project root for full license information.
  */
 
@@ -18,7 +18,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class JacksonCodec<T> extends ChannelCodec<T>
 {
     private final ObjectMapper objectMapper;
-    private final TypeReference dataType;
+    private final TypeReference<T> dataType;
 
     public JacksonCodec(ObjectMapper objectMapper, Class<T> dataClass, String name)
     {
@@ -27,7 +27,7 @@ public class JacksonCodec<T> extends ChannelCodec<T>
         this.dataType = null;
     }
 
-    public JacksonCodec(ObjectMapper objectMapper, TypeReference dataType, String name)
+    public JacksonCodec(ObjectMapper objectMapper, TypeReference<T> dataType, String name)
     {
         //noinspection unchecked
         super((Class<T>)TypeFactory.rawClass(dataType.getType()), name);
