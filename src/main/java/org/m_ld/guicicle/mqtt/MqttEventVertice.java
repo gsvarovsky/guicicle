@@ -147,7 +147,7 @@ public class MqttEventVertice implements ChannelProvider, Vertice, MqttEventClie
         CompositeFuture.all(closeables.stream().map(
             closeable -> Vertice.<Void>when(closeable::close)).collect(toList()))
             .compose(allClosed -> Vertice.<Void>when(mqtt::disconnect))
-            .setHandler(stopFuture);
+            .onComplete(stopFuture);
     }
 
     @Override public <T> Channel<T> channel(String address, ChannelOptions options)
@@ -226,7 +226,7 @@ public class MqttEventVertice implements ChannelProvider, Vertice, MqttEventClie
                         .otherwise(failure -> subscription.unsubscribed = failedFuture(failure));
             }).collect(toList()))
             // In the case that all unsubscribes have failed, signal the failure to the consumer
-            .setHandler(allResult -> signalIfDone(consumer, consumer::onUnsubscribe, s -> s.unsubscribed));
+            .onComplete(allResult -> signalIfDone(consumer, consumer::onUnsubscribe, s -> s.unsubscribed));
     }
 
     @Override public Object decodeFromWire(MqttPublishMessage message, MultiMap headers, String codecHint)
@@ -283,7 +283,7 @@ public class MqttEventVertice implements ChannelProvider, Vertice, MqttEventClie
 
     private void onSubscribeAck(MqttSubAckMessage subAckMessage)
     {
-        for (MqttConsumer consumer : consumers)
+        for (MqttConsumer consumer : new ArrayList<>(consumers))
         {
             boolean changed = false;
             for (Subscription subscription : consumer.subscriptions())
@@ -308,7 +308,7 @@ public class MqttEventVertice implements ChannelProvider, Vertice, MqttEventClie
 
     private void onUnsubscribeAck(Integer id)
     {
-        for (MqttConsumer consumer : consumers)
+        for (MqttConsumer consumer : new ArrayList<>(consumers))
         {
             boolean changed = false;
             for (Subscription subscription : consumer.subscriptions())
@@ -358,6 +358,6 @@ public class MqttEventVertice implements ChannelProvider, Vertice, MqttEventClie
 
     private void onPublishComplete(Integer msgId)
     {
-        producers.forEach(p -> p.onPublished(msgId));
+        new ArrayList<>(producers).forEach(p -> p.onPublished(msgId));
     }
 }
