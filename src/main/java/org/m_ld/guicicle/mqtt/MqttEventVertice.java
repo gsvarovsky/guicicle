@@ -339,7 +339,7 @@ public class MqttEventVertice implements ChannelProvider, Vertice, MqttEventClie
     private void onMessage(MqttPublishMessage msg)
     {
         boolean consumed = false;
-        for (MqttConsumer consumer : consumers)
+        for (MqttConsumer consumer : new ArrayList<>(consumers))
         {
             for (Subscription subscription : consumer.subscriptions())
             {
