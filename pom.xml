@@ -15,7 +15,7 @@
 
     <properties>
         <guice.version>4.2.2</guice.version>
-        <vertx.version>3.9.0</vertx.version>
+        <vertx.version>3.9.4</vertx.version>
     </properties>
 
     <repositories>
